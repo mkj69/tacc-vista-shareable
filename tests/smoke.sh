@@ -55,6 +55,25 @@ if grep -Eq '__LOGIN_ALIAS__|__COMPUTE_ALIAS__' "$rendered_dashboard"; then
     exit 1
 fi
 HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$repo_dir/scripts/doctor.sh"
+grep -Fq 'Host login-test' "$test_home/.ssh/tacc-vista/config"
+grep -Fq 'Host compute-test' "$test_home/.ssh/tacc-vista/config"
+grep -Fq 'vista-node-not-ready.invalid' "$test_home/.ssh/tacc-vista/current-node.conf"
+head -n 1 "$test_home/.ssh/config" | grep -Fq 'Include '
+test "$(grep -Fc 'Include ' "$test_home/.ssh/config")" -eq 1
+fake_bin="$test_root/bin"
+mkdir -p "$fake_bin"
+cat >"$fake_bin/ssh" <<'FAKESSH'
+#!/bin/bash
+printf '%s\n' compute-a.invalid compute-b.invalid
+FAKESSH
+chmod +x "$fake_bin/ssh"
+PATH="$fake_bin:$PATH" HOME="$test_home" TACC_VISTA_CONFIG="$config_file" \
+    "$test_home/.local/bin/vista-node-update.sh" 12345 >/dev/null
+grep -Fq 'Host compute-test-12345' "$test_home/.ssh/tacc-vista/allocations/12345.conf"
+grep -Fq 'Host compute-test-12345-n1' "$test_home/.ssh/tacc-vista/allocations/12345.conf"
+grep -Fq 'Host compute-test-12345-n2' "$test_home/.ssh/tacc-vista/allocations/12345.conf"
+grep -Fxq 'compute-test-12345-n1' "$test_home/.ssh/tacc-vista/allocations/12345.alias"
+grep -Fxq 'compute-test-12345-n2' "$test_home/.ssh/tacc-vista/allocations/12345.alias"
 if HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vista-allocate" invalid 1 none >/dev/null 2>&1; then
     printf '%s\n' 'Expected invalid partition validation to fail.' >&2
     exit 1
@@ -63,17 +82,15 @@ if HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vis
     printf '%s\n' 'Expected excessive node-count validation to fail.' >&2
     exit 1
 fi
-grep -Fq 'Host login-test' "$test_home/.ssh/tacc-vista/config"
-grep -Fq 'Host compute-test' "$test_home/.ssh/tacc-vista/config"
-grep -Fq 'vista-node-not-ready.invalid' "$test_home/.ssh/tacc-vista/current-node.conf"
-head -n 1 "$test_home/.ssh/config" | grep -Fq 'Include '
-test "$(grep -Fc 'Include ' "$test_home/.ssh/config")" -eq 1
 grep -Fq '"$@"' "$repo_dir/scripts/remote/start.sh"
 grep -Fq 'codex resume "$resume_ref"' "$repo_dir/scripts/remote/run-codex.sh"
 grep -Fq 'rm -f "$window_dir/active"' "$repo_dir/scripts/remote/run-codex.sh"
 grep -Fq 'exec "$editor_cli" --classic --new-window --folder-uri "$remote_uri"' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'allocation_alias="${COMPUTE_ALIAS}-${job_id}"' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'allocation_alias="${COMPUTE_ALIAS}-${job_id}"' "$repo_dir/scripts/local/vista-node-update.sh"
+grep -Fq 'cursor-all' "$repo_dir/scripts/local/vista-allocate"
+grep -Fq 'code-all' "$repo_dir/scripts/local/vista-allocate"
+grep -Fq "remote_command+=\" '\$job_id' all\"" "$repo_dir/scripts/local/vista-node-update.sh"
 grep -Fq 'vista-dashboard-open' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'ssh -O forward' "$repo_dir/scripts/local/vista-dashboard-open"
 grep -Fq '__LOGIN_ALIAS__' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"

@@ -198,7 +198,7 @@ fi
 trap - EXIT
 cleanup
 printf '%s\n' 'TACC Vista helpers installed successfully.'
-printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [nodes] [cursor|code|none]'
+printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [nodes] [cursor|code|cursor-all|code-all|none]'
 printf '%s\n' 'Open the monitoring dashboard separately with: vista-dashboard-open'
 if (( remote_install )); then
     printf '%s\n' 'On a compute node, run: ~/start.sh'

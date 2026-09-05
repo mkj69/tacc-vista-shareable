@@ -35,12 +35,13 @@ The screenshots below use synthetic placeholder data. They show the real dashboa
 ```bash
 vista-allocate gh 10 4
 vista-allocate gh 10 4 code
+vista-allocate gh 10 4 code-all
 vista-allocate gh 10 4 none
 ```
 
 The first command requests four `gh` nodes for ten hours and opens Cursor on the first assigned node. On Vista's current Grace–Hopper layout, four `gh` nodes correspond to four GPUs. The remaining nodes stay in the same Slurm allocation and must be used through an allocation-aware distributed launcher; opening an IDE on the first node does not automatically run work on all four GPUs.
 
-Each `vista-allocate` invocation opens exactly one IDE window for its allocation. The wrapper creates a private allocation-specific SSH alias, so a `gh` window and a later `gg` window remain connected to their own jobs instead of both following whichever node the shared base alias most recently selected.
+By default, each `vista-allocate` invocation opens exactly one IDE window for its allocation. The new `cursor-all` and `code-all` modes create one private SSH alias and one IDE window per allocated node. For example, `vista-allocate gh 10 4 code-all` opens four VS Code windows, while `vista-allocate gh 10 4 code` still opens only the first node. Allocation-specific aliases keep these windows attached to their own job instead of following whichever node the shared base alias most recently selected.
 
 Existing one-node commands remain compatible. A numeric third argument means node count, while `cursor`, `code`, or `none` as the third argument retains the legacy editor selection:
 
@@ -94,7 +95,7 @@ LOCAL COMPUTER
 │   ├─ wait for that exact job to reach RUNNING                │
 │   ├─ create a private allocation-specific SSH alias          │
 │   ├─ open the job dashboard through the login SSH master     │
-│   └─ open one IDE window through that allocation alias       │
+│   └─ open one window, or one per node with an `*-all` mode   │
 └───────────────────────────┬──────────────────────────────────┘
                             │ ProxyJump through login alias
                             ▼
@@ -174,7 +175,7 @@ See `references/configuration-template.md` for the placeholder contract and safe
 The installer does not submit a Slurm job. After installation, the user explicitly starts an allocation with:
 
 ```bash
-vista-allocate [partition] [hours] [nodes] [cursor|code|none]
+vista-allocate [partition] [hours] [nodes] [cursor|code|cursor-all|code-all|none]
 ```
 
 The dashboard opens automatically when an IDE is requested. It can also be opened independently:
@@ -196,7 +197,7 @@ The names below are documentation stand-ins, not universal TACC commands or valu
 | `[partition]` | A command argument such as `gg`, `gh`, or `gh-dev`, subject to the user's account access. Square brackets in a command synopsis describe an argument; they are not typed. |
 | `[hours]` | Requested Slurm wall time in hours, for example `6`, within the selected partition's limit. |
 | `[nodes]` | Optional positive node count. Omit it for one node. A numeric third argument is interpreted as nodes; configured per-partition limits are enforced. |
-| `[cursor\|code\|none]` | Whether to open Cursor, open VS Code, or only prepare the compute SSH alias. |
+| `[cursor\|code\|cursor-all\|code-all\|none]` | Open one Cursor/VS Code window, open one window per allocated node, or only prepare the compute SSH aliases. |
 | `WINDOW` | A user-chosen label for one managed Codex window, such as `paper` or `analysis`; it is not an operating-system window ID. |
 
 An SSH alias is simply a convenient local name defined in `~/.ssh/config`. For example, after `LOGIN_ALIAS` has been configured, `ssh your-login-alias` means “replace `your-login-alias` with that chosen short name and let SSH read the real username, login endpoint, key path, and connection settings from its configuration.” The populated machine-specific values live outside this repository so they cannot be exposed by sharing the skill.
@@ -261,6 +262,7 @@ vista-allocate gg 6 cursor
 vista-allocate gh 6 cursor
 vista-allocate gh-dev 2 cursor
 vista-allocate gh 10 4 cursor
+vista-allocate gh 10 4 code-all
 ```
 
 Only use a partition available to the current TACC account. Queue availability and limits can change, and TACC notes that its documentation table may lag behind the live scheduler configuration. Check the current account's real-time limits from the local computer with:
@@ -275,6 +277,8 @@ The final argument controls the launch:
 
 - `cursor` opens Cursor.
 - `code` opens VS Code.
+- `cursor-all` opens one Cursor window for every allocated node.
+- `code-all` opens one VS Code window for every allocated node.
 - `none` prepares the compute SSH alias without opening an IDE.
 
 For current Cursor releases, the launcher requests a classic IDE window before opening the Remote-SSH folder. This prevents Cursor from showing its standalone Agent/Glass landing page in place of the file editor. Cursor's Agent tools remain available inside the IDE.
@@ -295,7 +299,7 @@ If the allocation is pending, leave the local command running; it waits until th
 
 After a successful launch, the IDE's remote terminal is running on the **compute node**. The login node remains only the authentication, scheduler, and jump layer.
 
-For each allocation, the wrapper creates an allocation-specific alias and points it to the first hostname in Slurm's assigned nodelist. It opens one IDE window through that alias. The other nodes are reserved by the same allocation, but ordinary commands typed into the IDE terminal run only on the first node. Use the site's supported distributed launcher and the allocation's job ID when intentionally starting work across all allocated nodes. Allocation-specific aliases remain separate, so opening another allocation does not redirect an earlier `gh` or `gg` window.
+For each allocation, the wrapper creates a primary allocation-specific alias for the first hostname plus numbered aliases for every hostname in Slurm's assigned nodelist. The ordinary `cursor` and `code` modes open one IDE window through the primary alias. The `cursor-all` and `code-all` modes open one window per numbered node alias. Each terminal still runs on only the node shown by that window; opening every node is convenient for inspection but does not replace a supported distributed launcher. Allocation-specific aliases remain separate, so opening another allocation does not redirect an earlier `gh` or `gg` window.
 
 ### 3. Optionally start or restore Codex on the compute node
 

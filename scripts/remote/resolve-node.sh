@@ -8,10 +8,15 @@ load_config "$HOME/.config/tacc-vista/config"
 require_config_vars ALLOCATION_JOB_NAME
 
 requested_job_id="${1:-}"
+output_mode="${2:-first}"
 if [[ -n "$requested_job_id" && ! "$requested_job_id" =~ ^[0-9]+$ ]]; then
     printf '%s\n' 'Invalid Slurm job ID.' >&2
     exit 2
 fi
+case "$output_mode" in
+    first|all) ;;
+    *) printf '%s\n' 'Output mode must be first or all.' >&2; exit 2 ;;
+esac
 
 if [[ -n "$requested_job_id" ]]; then
     job_line="$(squeue -h -j "$requested_job_id" -o '%i|%j|%T|%N' 2>/dev/null | head -n 1 || true)"
@@ -31,7 +36,12 @@ case "$job_state" in
     *) printf '%s\n' 'The requested allocation entered a terminal or unusable state.' >&2; exit 76 ;;
 esac
 
-node="$(scontrol show hostnames "$node_list" | head -n 1)"
-[[ -z "$node" ]] && exit 75
+nodes="$(scontrol show hostnames "$node_list")"
+[[ -z "$nodes" ]] && exit 75
+first_node="$(printf '%s\n' "$nodes" | head -n 1)"
 printf '%s\n' 'Resolved the running compute node.' >&2
-printf '%s\n' "$node"
+if [[ "$output_mode" == all ]]; then
+    printf '%s\n' "$nodes"
+else
+    printf '%s\n' "$first_node"
+fi

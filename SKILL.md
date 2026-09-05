@@ -50,7 +50,7 @@ The local wrapper should:
 1. submit the explicitly requested allocation or reuse an active allocation only when its partition, wall time, and node count all match;
 2. retain the numeric job ID only in process memory;
 3. wait for that exact job to become running;
-4. resolve its assigned node without writing the node into the skill;
+4. resolve its assigned nodelist without writing node names into the skill;
 5. atomically update a private SSH include;
 6. open the preferred IDE at the configured remote project directory.
 
@@ -91,11 +91,11 @@ Explain that charts begin sampling when a job page is opened and keep recent sam
 Explain the post-install workflow with command locations made explicit:
 
 1. On the local computer, optionally pre-establish the reusable login master with `ssh -O check LOGIN_ALIAS 2>/dev/null || ssh -MNf LOGIN_ALIAS`. This prompts for fresh authentication only when no usable master exists.
-2. Still on the local computer, run `vista-allocate PARTITION HOURS NODES cursor` (or `code`/`none`). Omit `NODES` for a one-node allocation; preserve the legacy `vista-allocate PARTITION HOURS EDITOR` form. Never tell the user to run this local wrapper from the login-node shell.
-3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the base compute alias, creates an allocation-specific alias derived from the job ID in private local state, opens the dashboard through the login master, and opens exactly one IDE window whose SSH target is that allocation-specific alias.
+2. Still on the local computer, run `vista-allocate PARTITION HOURS NODES cursor` (or `code`, `cursor-all`, `code-all`, or `none`). Omit `NODES` for a one-node allocation; preserve the legacy `vista-allocate PARTITION HOURS EDITOR` form. Never tell the user to run this local wrapper from the login-node shell.
+3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the base compute alias, creates allocation- and node-specific aliases in private local state, opens the dashboard through the login master, and opens the requested IDE window or windows.
 4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
 
-For a multi-node allocation, resolve the Slurm nodelist and point the allocation-specific alias at its first hostname. Explain that one invocation opens one IDE window on that first node; the other nodes remain part of the same allocation and require an allocation-aware distributed launcher. Preserve earlier allocation-specific aliases so simultaneous allocations can keep separate IDE windows and reconnect without a later invocation redirecting them. Do not imply that opening the IDE automatically uses every allocated accelerator.
+For a multi-node allocation, resolve the entire Slurm nodelist. Keep `cursor` and `code` as the safe default that opens one window on the first node. Support explicit `cursor-all` and `code-all` modes that open one window for each numbered node alias. Preserve earlier allocation-specific aliases so simultaneous allocations can keep separate IDE windows and reconnect without a later invocation redirecting them. Explain that several open terminals do not automatically coordinate a distributed workload or use every accelerator; use an allocation-aware launcher for that.
 
 When launching Cursor, use its classic-window flag together with the remote folder URI. Current Cursor releases can otherwise route a command-line launch into the Agent/Glass landing window even though the Remote-SSH target is valid. This compatibility flag affects the window type; it does not disable Cursor's Agent features inside the IDE.
 
