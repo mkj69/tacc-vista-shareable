@@ -6,6 +6,12 @@ The repository contains placeholders only. It does not include usernames, accoun
 
 ## News
 
+### 2026-09-05 — Visual Slurm job submission
+
+The dashboard header now contains a collapsible **Submit a new job** form. It accepts the absolute path of an existing Vista `sbatch` script plus optional overrides for partition, time limit, nodes, tasks, CPUs per task, job name, account, and QoS. Blank overrides defer to the script's `#SBATCH` directives or scheduler defaults.
+
+Submission is deliberately two-step: **Review submission** displays an argument-style preview, and **Confirm job submission** creates the real job. The server validates every field, requires a readable absolute script path, calls `sbatch --parsable` without a shell, and uses a request ID to prevent an accidental double click from creating duplicate jobs. The endpoint is protected by the dashboard request token and loopback-only SSH tunnel. The form does not upload or edit scripts.
+
 ### 2026-09-05 — Guarded job cancellation in the dashboard
 
 Active-job rows and job-detail pages now include a **Cancel job** button. Because cancellation cannot be undone, the dashboard requires the user to type the complete Job ID before it sends the request. The server then verifies that the exact job is still active and belongs to the current Vista login user before calling `scancel`.
@@ -34,6 +40,7 @@ The installer now adds `vista-dashboard-open` and a loopback-only Vista dashboar
 - per-node CPU utilization, used memory, memory percentage, and load curves, alongside separately labeled Slurm job-level CPU time and MaxRSS;
 - zero lines when a metric is unused or unavailable;
 - Chinese/English switching, persistent expanded details, and five-second polling;
+- a two-step visual form for submitting an existing Vista `sbatch` script with validated optional resource overrides;
 - a guarded cancellation button for active jobs, with typed Job ID confirmation and current-user ownership checks;
 - a common-command page with copy-only examples for local SSH, allocation, queue inspection, submission, cancellation, monitoring, and Codex recovery.
 
@@ -381,6 +388,8 @@ The homepage intentionally avoids launching `nvidia-smi` for every job. Click **
 Automatic polling updates values without collapsing opened details or changing the selected language. The language preference is stored in both browser storage and a cookie so it also survives a change between local forwarding ports. A cancelled job is removed from the active table and merged into recent terminal history, including a never-started cancellation that Slurm's time-range accounting query may otherwise omit.
 
 To cancel an active job from the dashboard, click **Cancel job**, then type the complete Job ID shown beside the button. Closing the prompt or entering anything else makes no change. A successful response means the dashboard submitted a cancellation request to Slurm; the next refresh reflects the scheduler's resulting state. Cancellation is destructive and cannot resume the stopped process, so use it only for the intended Job ID.
+
+To submit a job, expand **Submit a new job** in the header and enter an existing absolute Vista script path, such as `~/projects/example/job.sbatch`. Optional fields override matching `#SBATCH` directives; leave them blank to keep the script or scheduler value. Select **Review submission**, verify the preview, then select **Confirm job submission**. This creates a new Slurm job—it is separate from `vista-allocate`, does not open an IDE, and does not upload or modify the script.
 
 ## Repository contents
 

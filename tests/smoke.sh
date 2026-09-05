@@ -48,7 +48,7 @@ bash -n \
     "$repo_dir/scripts/remote/start.sh" \
     "$repo_dir/scripts/remote/dashboard-start.sh"
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
-PYTHONPYCACHEPREFIX="$test_root/pycache" python3 "$repo_dir/tests/test_dashboard_cancel.py"
+PYTHONPYCACHEPREFIX="$test_root/pycache" python3 "$repo_dir/tests/test_dashboard_controls.py"
 rendered_dashboard="$test_root/rendered-dashboard.py"
 sed -e 's/__LOGIN_ALIAS__/login-test/g' -e 's/__COMPUTE_ALIAS__/compute-test/g' \
     "$repo_dir/scripts/dashboard/vista_job_dashboard.py" >"$rendered_dashboard"
@@ -118,6 +118,9 @@ grep -Fq 'openDetailKeys' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq 'request_job_cancel' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq 'X-Vista-CSRF' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq 'cancel-job' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq 'request_job_submit' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq "fetch('/api/submit'" "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq 'submit-review' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq "submit-node.sh '\$partition' '\$walltime' '\$nodes'" "$repo_dir/scripts/local/vista-allocate"
 grep -Fq -- '--nodes="$nodes"' "$repo_dir/scripts/remote/submit-node.sh"
 grep -Fq -- '--ntasks="$nodes"' "$repo_dir/scripts/remote/submit-node.sh"

@@ -80,6 +80,7 @@ The dashboard must provide:
 - zero-valued chart series when a metric or device is absent, rather than replacing charts with text;
 - a bilingual Chinese/English toggle whose choice survives polling, reloads, and local-port changes;
 - persistent open/closed state for job-detail controls across automatic polling;
+- a two-step visual submission form in the homepage header for an existing Vista `sbatch` script;
 - a guarded cancel button on active-job rows and detail pages;
 - a bilingual common-command page with copy-only buttons and explicit local/login/compute execution locations.
 
@@ -87,7 +88,11 @@ Poll the homepage without launching per-job live sampling steps. On a running de
 
 Treat only pending, running, configuring, completing, suspended, or stopped states as active. Put cancelled, failed, timed-out, out-of-memory, node-failed, preempted, and completed jobs in history. Merge terminal IDs still visible through `squeue` with accounting history so a never-started cancellation moves out of the active table immediately.
 
-Explain that charts begin sampling when a job page is opened and keep recent samples in the browser; the dashboard cannot reconstruct telemetry that was never collected. The command-reference page remains copy-only. The active-job cancel button is the sole scheduler mutation: accept only POST, require a per-process request token plus an exact typed Job ID confirmation, resolve the OS login user on the server, verify the exact job is active for that user through `squeue`, and invoke `scancel` with an argument list. Never accept a client-supplied cancellation user or expose the server outside loopback.
+Explain that charts begin sampling when a job page is opened and keep recent samples in the browser; the dashboard cannot reconstruct telemetry that was never collected. The command-reference page remains copy-only.
+
+The homepage submission form and active-job cancel button are the only scheduler mutations. For submission, require an existing readable absolute Vista script path, accept only structured optional overrides, validate partition/time/numeric/identifier fields, show a separate review step, then call `sbatch --parsable` with an argument list and no shell. Use a per-process request ID cache so a repeated confirmation cannot create a duplicate job. Do not upload, edit, discover, or persist script contents or form values.
+
+For cancellation, require an exact typed Job ID confirmation, resolve the OS login user on the server, verify the exact job is active for that user through `squeue`, and invoke `scancel` with an argument list. Both endpoints must accept only POST with a per-process request token. Never accept a client-supplied user or expose the server outside loopback.
 
 ## Normal operation
 
@@ -120,4 +125,4 @@ Treat `~/start.sh` as optional convenience, not a prerequisite for allocation, S
 
 ## Verification
 
-Validate shell, Python, embedded JavaScript, and SSH configuration without echoing resolved identities. Test the login path, dashboard tunnel, and compute path separately. Verify the dashboard server is loopback-only, that the homepage does not run GPU sampling, and that cancellation tests replace `scancel` with a mock. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.
+Validate shell, Python, embedded JavaScript, and SSH configuration without echoing resolved identities. Test the login path, dashboard tunnel, and compute path separately. Verify the dashboard server is loopback-only, that the homepage does not run GPU sampling, and that control tests replace both `sbatch` and `scancel` with mocks. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.

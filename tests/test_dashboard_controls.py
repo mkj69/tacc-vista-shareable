@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -55,11 +56,84 @@ class CancellationHelperTests(unittest.TestCase):
         self.assertNotIn("__DASHBOARD_CSRF_TOKEN__", html)
 
 
+class SubmissionHelperTests(unittest.TestCase):
+    def setUp(self) -> None:
+        DASHBOARD._submission_results.clear()
+
+    def submission(self, path: str) -> dict[str, object]:
+        return {
+            "request_id": "request_0123456789abcdef",
+            "script_path": path,
+            "partition": "gh",
+            "time_limit": "01:30:00",
+            "nodes": "2",
+            "ntasks": "2",
+            "cpus_per_task": "8",
+            "job_name": "visual-submit-test",
+            "account": "test-account",
+            "qos": "test-qos",
+        }
+
+    def test_structured_submission_builds_argument_list(self) -> None:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sbatch") as script:
+            script.write("#!/bin/bash\ntrue\n")
+            script.flush()
+            payload = self.submission(script.name)
+            output = "validation banner\n12345"
+            with mock.patch.object(DASHBOARD, "run_cmd", return_value=output) as run_cmd:
+                result = DASHBOARD.request_job_submit("test-user", payload)
+
+            run_cmd.assert_called_once_with(
+                [
+                    "sbatch", "--parsable", "--partition=gh", "--time=01:30:00", "--nodes=2",
+                    "--ntasks=2", "--cpus-per-task=8", "--job-name=visual-submit-test",
+                    "--account=test-account", "--qos=test-qos", str(Path(script.name).resolve()),
+                ],
+                timeout=60,
+            )
+        self.assertEqual(result["job_id"], "12345")
+        self.assertFalse(result["duplicate"])
+
+    def test_same_request_id_is_idempotent(self) -> None:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sbatch") as script:
+            payload = self.submission(script.name)
+            with mock.patch.object(DASHBOARD, "run_cmd", return_value="Submitted batch job 12345") as run_cmd:
+                first = DASHBOARD.request_job_submit("test-user", payload)
+                second = DASHBOARD.request_job_submit("test-user", payload)
+        run_cmd.assert_called_once()
+        self.assertFalse(first["duplicate"])
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(second["job_id"], "12345")
+
+    def test_invalid_submission_never_reaches_sbatch(self) -> None:
+        payload = self.submission("relative/job.sbatch")
+        with mock.patch.object(DASHBOARD, "run_cmd") as run_cmd:
+            with self.assertRaises(ValueError):
+                DASHBOARD.request_job_submit("test-user", payload)
+        run_cmd.assert_not_called()
+
+    def test_partition_walltime_limit_is_enforced(self) -> None:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sbatch") as script:
+            payload = self.submission(script.name)
+            payload["partition"] = "gh-dev"
+            payload["time_limit"] = "02:00:01"
+            with mock.patch.object(DASHBOARD, "run_cmd") as run_cmd:
+                with self.assertRaises(ValueError):
+                    DASHBOARD.request_job_submit("test-user", payload)
+        run_cmd.assert_not_called()
+
+    def test_html_contains_two_step_submission_form(self) -> None:
+        html = DASHBOARD.dashboard_html()
+        self.assertIn('id="submit-form"', html)
+        self.assertIn('id="submit-review"', html)
+        self.assertIn("fetch('/api/submit'", html)
+
+
 class CancellationEndpointTests(unittest.TestCase):
-    def post(self, payload: dict[str, str], token: str) -> tuple[int, dict[str, str]]:
+    def post(self, payload: dict[str, str], token: str, path: str = "/api/cancel") -> tuple[int, dict[str, str]]:
         body = json.dumps(payload).encode("utf-8")
         handler = DASHBOARD.DashboardHandler.__new__(DASHBOARD.DashboardHandler)
-        handler.path = "/api/cancel"
+        handler.path = path
         handler.headers = {
             "Content-Type": "application/json",
             "Content-Length": str(len(body)),
@@ -103,6 +177,17 @@ class CancellationEndpointTests(unittest.TestCase):
             )
         self.assertEqual(status, 400)
         cancel.assert_not_called()
+
+    def test_valid_submit_post_reaches_mock_only(self) -> None:
+        result = {"job_id": "12345", "message": "submitted"}
+        payload = {"request_id": "request_0123456789abcdef", "script_path": "/tmp/test.sbatch"}
+        with mock.patch.object(DASHBOARD.getpass, "getuser", return_value="test-user"), mock.patch.object(
+            DASHBOARD, "request_job_submit", return_value=result
+        ) as submit:
+            status, body = self.post(payload, DASHBOARD.DASHBOARD_CSRF_TOKEN, path="/api/submit")
+        self.assertEqual(status, 202)
+        self.assertEqual(body["job_id"], "12345")
+        submit.assert_called_once_with("test-user", payload)
 
 
 if __name__ == "__main__":

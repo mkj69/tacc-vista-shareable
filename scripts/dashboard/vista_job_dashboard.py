@@ -11,18 +11,27 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 
 DASHBOARD_CSRF_TOKEN = secrets.token_urlsafe(32)
 SLURM_JOB_ID_PATTERN = re.compile(r"[0-9]+(?:_[0-9]+|_\[[0-9,%-]+\])?")
+SUBMIT_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,96}")
+SBATCH_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
+SBATCH_WALLTIME_PATTERN = re.compile(r"(?:[0-9]+-)?[0-9]{1,2}:[0-5][0-9]:[0-5][0-9]")
+VISTA_PARTITION_LIMIT_SECONDS = {"gg": 48 * 3600, "gh": 48 * 3600, "gh-dev": 2 * 3600}
+_submission_results: dict[str, dict[str, object]] = {}
+_submission_lock = threading.Lock()
 
 
 def run_cmd(cmd: list[str], timeout: int = 15) -> str:
@@ -319,6 +328,113 @@ def request_job_cancel(user: str, job_id: str) -> dict[str, str]:
         "previous_state": exact_job.get("state", "UNKNOWN"),
         "message": f"Cancellation requested for job {job_id}",
     }
+
+
+def _optional_positive_int(payload: dict[str, object], key: str, maximum: int) -> int | None:
+    raw = str(payload.get(key, "")).strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or not 1 <= int(raw) <= maximum:
+        raise ValueError(f"{key} must be an integer from 1 to {maximum}")
+    return int(raw)
+
+
+def _optional_identifier(payload: dict[str, object], key: str) -> str:
+    value = str(payload.get(key, "")).strip()
+    if value and not SBATCH_IDENTIFIER_PATTERN.fullmatch(value):
+        raise ValueError(f"{key} contains unsupported characters")
+    return value
+
+
+def build_sbatch_command(payload: dict[str, object]) -> list[str]:
+    """Validate structured form fields and build an argument-only sbatch command."""
+    script_text = str(payload.get("script_path", "")).strip()
+    if not script_text:
+        raise ValueError("script_path is required")
+    script_path = Path(script_text).expanduser()
+    if not script_path.is_absolute():
+        raise ValueError("script_path must be an absolute path or begin with ~")
+    try:
+        script_path = script_path.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        raise ValueError("The sbatch script does not exist")
+    if not script_path.is_file() or not os.access(script_path, os.R_OK):
+        raise ValueError("The sbatch script is not a readable file")
+
+    partition = str(payload.get("partition", "")).strip()
+    if partition and partition not in VISTA_PARTITION_LIMIT_SECONDS:
+        raise ValueError("partition must be gg, gh, gh-dev, or empty")
+    walltime = str(payload.get("time_limit", "")).strip()
+    if walltime:
+        if not SBATCH_WALLTIME_PATTERN.fullmatch(walltime):
+            raise ValueError("time_limit must use HH:MM:SS or D-HH:MM:SS")
+        seconds = parse_slurm_duration_seconds(walltime)
+        if seconds <= 0:
+            raise ValueError("time_limit must be greater than zero")
+        if partition and seconds > VISTA_PARTITION_LIMIT_SECONDS[partition]:
+            raise ValueError(f"time_limit exceeds the configured limit for {partition}")
+
+    nodes = _optional_positive_int(payload, "nodes", 128)
+    ntasks = _optional_positive_int(payload, "ntasks", 65536)
+    cpus_per_task = _optional_positive_int(payload, "cpus_per_task", 1024)
+    job_name = _optional_identifier(payload, "job_name")
+    account = _optional_identifier(payload, "account")
+    qos = _optional_identifier(payload, "qos")
+
+    command = ["sbatch", "--parsable"]
+    for option, value in (
+        ("partition", partition),
+        ("time", walltime),
+        ("nodes", nodes),
+        ("ntasks", ntasks),
+        ("cpus-per-task", cpus_per_task),
+        ("job-name", job_name),
+        ("account", account),
+        ("qos", qos),
+    ):
+        if value not in {None, ""}:
+            command.append(f"--{option}={value}")
+    command.append(str(script_path))
+    return command
+
+
+def extract_submitted_job_id(output: str) -> str:
+    for line in reversed(output.splitlines()):
+        text = line.strip()
+        match = re.fullmatch(r"([0-9]+)(?:;[^\s]+)?", text)
+        if match:
+            return match.group(1)
+        match = re.fullmatch(r"Submitted batch job ([0-9]+)", text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def request_job_submit(user: str, payload: dict[str, object]) -> dict[str, object]:
+    """Submit one validated sbatch file, with per-process idempotency."""
+    if not user:
+        raise ValueError("Unable to resolve the current login user")
+    request_id = str(payload.get("request_id", "")).strip()
+    if not SUBMIT_REQUEST_ID_PATTERN.fullmatch(request_id):
+        raise ValueError("Invalid submission request ID")
+    command = build_sbatch_command(payload)
+
+    with _submission_lock:
+        cached = _submission_results.get(request_id)
+        if cached is not None:
+            return {**cached, "duplicate": True}
+        output = run_cmd(command, timeout=60)
+        job_id = extract_submitted_job_id(output)
+        result: dict[str, object] = {
+            "job_id": job_id or None,
+            "message": f"Submitted job {job_id}" if job_id else "Submission accepted; refresh the queue to find its Job ID",
+            "command_preview": shlex.join(command),
+            "duplicate": False,
+        }
+        if len(_submission_results) >= 256:
+            _submission_results.pop(next(iter(_submission_results)))
+        _submission_results[request_id] = result
+        return result
 
 
 HISTORY_FIELDS = [
@@ -1015,6 +1131,17 @@ def dashboard_html() -> str:
   .command-code { display:block; margin-top:10px; padding:10px; background:#090c10; border:1px solid #30363d; border-radius:6px; color:#aff5b4; overflow:auto; white-space:pre; }
   .where { color:#79c0ff; font-size:11px; margin-top:4px; }
   .danger-note { color:#ffb3ad; }
+  .submit-panel { margin-top:12px; background:#11161d; border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .submit-panel > summary { font-weight:650; font-size:14px; }
+  .submit-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin-top:10px; }
+  .submit-field { display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .submit-field-wide { grid-column:1 / -1; }
+  .submit-field label { color:var(--muted); font-size:12px; }
+  .submit-field input, .submit-field select { color:var(--text); background:#0d1117; border:1px solid #4b5563; border-radius:6px; padding:8px; min-width:0; }
+  .submit-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+  .submit-review { margin-top:10px; padding:10px; border:1px solid #3b6ea8; border-radius:7px; background:#101c2b; }
+  .submit-preview { display:block; margin:8px 0; padding:9px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .submit-status { min-height:18px; margin-top:8px; }
   .command-section h2 { margin:2px 0 5px; }
   .command-section + .command-section { margin-top:20px; }
   .hidden { display:none !important; }
@@ -1039,6 +1166,31 @@ def dashboard_html() -> str:
     </div>
     <div class="small" data-i18n="gpu_page_hint">📈 点击作业旁的“查看 CPU/GPU 图表”进入真实折线图页面。</div>
 <div class="small"><span data-i18n="filters">当前筛选</span>: <span data-i18n="user_label">用户</span> <span id="user"></span> · <span data-i18n="partition_label">分区</span> <span id="parts"></span> · <span data-i18n="name_contains">作业名包含</span> <span id="jobfilter"></span></div>
+    <details id="submit-panel" class="submit-panel">
+      <summary>➕ <span data-i18n="submit_new_job">提交新任务</span></summary>
+      <div class="small" style="margin-top:7px" data-i18n="submit_form_hint">选择 Vista 上已经存在的 sbatch 脚本。留空的资源字段由脚本中的 #SBATCH 或系统默认值决定。</div>
+      <form id="submit-form" autocomplete="off">
+        <div class="submit-grid">
+          <div class="submit-field submit-field-wide"><label for="submit-script" data-i18n="script_path">脚本绝对路径</label><input id="submit-script" name="script_path" type="text" required placeholder="~/projects/example/job.sbatch"></div>
+          <div class="submit-field"><label for="submit-partition" data-i18n="partition_override">分区（可选覆盖）</label><select id="submit-partition" name="partition"><option value="" data-i18n="use_script_default">使用脚本/系统默认</option><option value="gg">gg</option><option value="gh">gh</option><option value="gh-dev">gh-dev</option></select></div>
+          <div class="submit-field"><label for="submit-time" data-i18n="walltime_override">时限（可选覆盖）</label><input id="submit-time" name="time_limit" type="text" inputmode="numeric" placeholder="01:00:00"></div>
+          <div class="submit-field"><label for="submit-nodes" data-i18n="nodes_override">节点数（可选覆盖）</label><input id="submit-nodes" name="nodes" type="number" min="1" max="128" step="1"></div>
+          <div class="submit-field"><label for="submit-ntasks" data-i18n="ntasks_override">任务数（可选覆盖）</label><input id="submit-ntasks" name="ntasks" type="number" min="1" max="65536" step="1"></div>
+          <div class="submit-field"><label for="submit-cpus" data-i18n="cpus_task_override">每任务 CPU（可选覆盖）</label><input id="submit-cpus" name="cpus_per_task" type="number" min="1" max="1024" step="1"></div>
+          <div class="submit-field"><label for="submit-name" data-i18n="job_name_override">任务名称（可选覆盖）</label><input id="submit-name" name="job_name" type="text" maxlength="128"></div>
+          <div class="submit-field"><label for="submit-account" data-i18n="account_override">Account（可选覆盖）</label><input id="submit-account" name="account" type="text" maxlength="128"></div>
+          <div class="submit-field"><label for="submit-qos" data-i18n="qos_override">QoS（可选覆盖）</label><input id="submit-qos" name="qos" type="text" maxlength="128"></div>
+        </div>
+        <div class="submit-actions"><button class="button" type="submit">🔎 <span data-i18n="review_submission">预览提交</span></button></div>
+      </form>
+      <div id="submit-review" class="submit-review hidden">
+        <strong data-i18n="review_title">请核对将要执行的提交</strong>
+        <code id="submit-preview" class="submit-preview mono"></code>
+        <div class="small" data-i18n="submit_warning">确认后会立即创建一个真实 Slurm 作业，并可能消耗计算配额。</div>
+        <div class="submit-actions"><button id="confirm-submit" class="button" type="button">🚀 <span data-i18n="confirm_submit">确认提交任务</span></button></div>
+      </div>
+      <div id="submit-status" class="submit-status small" role="status" aria-live="polite"></div>
+    </details>
     <div id="summary" class="stats"></div>
   </div>
   <div id="container" class="panel">
@@ -1120,7 +1272,14 @@ const I18N = {
     copy:'复制', copied:'已复制', view_charts:'查看 CPU/GPU 图表', cancel_job:'取消任务',
     cancelling:'正在请求取消…', cancel_prompt:'危险操作：取消后任务无法恢复。请输入完整 Job ID {jobid} 以确认：',
     cancel_mismatch:'输入的 Job ID 不匹配，未取消任务。', cancel_requested:'已向 Slurm 请求取消任务 {jobid}。',
-    cancel_failed:'取消失败', gpu_page_hint:'📈 点击作业旁的“查看 CPU/GPU 图表”进入真实折线图页面。'
+    cancel_failed:'取消失败', gpu_page_hint:'📈 点击作业旁的“查看 CPU/GPU 图表”进入真实折线图页面。',
+    submit_new_job:'提交新任务', submit_form_hint:'选择 Vista 上已经存在的 sbatch 脚本。留空的资源字段由脚本中的 #SBATCH 或系统默认值决定。',
+    script_path:'脚本绝对路径', partition_override:'分区（可选覆盖）', use_script_default:'使用脚本/系统默认',
+    walltime_override:'时限（可选覆盖）', nodes_override:'节点数（可选覆盖）', ntasks_override:'任务数（可选覆盖）',
+    cpus_task_override:'每任务 CPU（可选覆盖）', job_name_override:'任务名称（可选覆盖）', account_override:'Account（可选覆盖）',
+    qos_override:'QoS（可选覆盖）', review_submission:'预览提交', review_title:'请核对将要执行的提交',
+    submit_warning:'确认后会立即创建一个真实 Slurm 作业，并可能消耗计算配额。', confirm_submit:'确认提交任务',
+    submitting_job:'正在提交…', submitted_job:'已提交任务 {jobid}', submitted_unknown:'提交已接受；请刷新任务列表查看 Job ID。', submit_failed:'提交失败'
   },
   en: {
     all_jobs:'All jobs', dashboard_title:'Vista Jobs, CPU & GPU Dashboard', auto_refresh:'Auto refresh',
@@ -1150,7 +1309,14 @@ const I18N = {
     copy:'Copy', copied:'Copied', view_charts:'View CPU/GPU charts', cancel_job:'Cancel job',
     cancelling:'Requesting cancellation…', cancel_prompt:'Destructive action: cancellation cannot be undone. Type the full Job ID {jobid} to confirm:',
     cancel_mismatch:'The Job ID did not match. Nothing was cancelled.', cancel_requested:'Slurm cancellation requested for job {jobid}.',
-    cancel_failed:'Cancellation failed', gpu_page_hint:'📈 Use “View CPU/GPU charts” beside a job to open its real line-chart page.'
+    cancel_failed:'Cancellation failed', gpu_page_hint:'📈 Use “View CPU/GPU charts” beside a job to open its real line-chart page.',
+    submit_new_job:'Submit a new job', submit_form_hint:'Choose an existing sbatch script on Vista. Blank resource fields defer to #SBATCH directives or scheduler defaults.',
+    script_path:'Absolute script path', partition_override:'Partition (optional override)', use_script_default:'Use script/system default',
+    walltime_override:'Time limit (optional override)', nodes_override:'Nodes (optional override)', ntasks_override:'Tasks (optional override)',
+    cpus_task_override:'CPUs per task (optional override)', job_name_override:'Job name (optional override)', account_override:'Account (optional override)',
+    qos_override:'QoS (optional override)', review_submission:'Review submission', review_title:'Review the pending submission',
+    submit_warning:'Confirmation immediately creates a real Slurm job and may consume compute allocation.', confirm_submit:'Confirm job submission',
+    submitting_job:'Submitting…', submitted_job:'Submitted job {jobid}', submitted_unknown:'Submission accepted; refresh the job list to find its Job ID.', submit_failed:'Submission failed'
   }
 };
 function readLanguagePreference() {
@@ -1184,6 +1350,7 @@ document.getElementById('lang-toggle').addEventListener('click', () => {
   if (detailJobId && latestDetailJob) renderJobDetail(latestDetailJob);
   if (!detailJobId && !commandPage && latestHomeData) renderHome(latestHomeData);
   if (commandPage) renderCommands();
+  if (pendingSubmission) renderSubmissionReview();
 });
 applyLanguage();
 document.getElementById('interval').textContent = interval;
@@ -1201,6 +1368,102 @@ if (commandPage) {
 }
 let latestHomeData = null;
 let latestDetailJob = null;
+let pendingSubmission = null;
+
+function createSubmissionRequestId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function shellQuote(value) {
+  const text = String(value);
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+function submissionPayloadFromForm() {
+  const values = Object.fromEntries(new FormData(document.getElementById('submit-form')).entries());
+  return {
+    script_path: String(values.script_path || '').trim(),
+    partition: String(values.partition || '').trim(),
+    time_limit: String(values.time_limit || '').trim(),
+    nodes: String(values.nodes || '').trim(),
+    ntasks: String(values.ntasks || '').trim(),
+    cpus_per_task: String(values.cpus_per_task || '').trim(),
+    job_name: String(values.job_name || '').trim(),
+    account: String(values.account || '').trim(),
+    qos: String(values.qos || '').trim(),
+    request_id: createSubmissionRequestId(),
+  };
+}
+
+function submissionPreviewArgs(payload) {
+  const args = ['sbatch', '--parsable'];
+  for (const [option, key] of [
+    ['partition', 'partition'], ['time', 'time_limit'], ['nodes', 'nodes'], ['ntasks', 'ntasks'],
+    ['cpus-per-task', 'cpus_per_task'], ['job-name', 'job_name'], ['account', 'account'], ['qos', 'qos']
+  ]) {
+    if (payload[key]) args.push(`--${option}=${payload[key]}`);
+  }
+  args.push(payload.script_path);
+  return args;
+}
+
+function renderSubmissionReview() {
+  if (!pendingSubmission) return;
+  document.getElementById('submit-preview').textContent = submissionPreviewArgs(pendingSubmission).map(shellQuote).join(' ');
+  document.getElementById('submit-review').classList.remove('hidden');
+}
+
+const submitForm = document.getElementById('submit-form');
+const submitReview = document.getElementById('submit-review');
+const submitStatus = document.getElementById('submit-status');
+const confirmSubmit = document.getElementById('confirm-submit');
+
+submitForm.addEventListener('submit', event => {
+  event.preventDefault();
+  if (!submitForm.reportValidity()) return;
+  pendingSubmission = submissionPayloadFromForm();
+  submitStatus.textContent = '';
+  confirmSubmit.disabled = false;
+  renderSubmissionReview();
+});
+
+submitForm.addEventListener('input', () => {
+  pendingSubmission = null;
+  submitReview.classList.add('hidden');
+  submitStatus.textContent = '';
+  confirmSubmit.disabled = false;
+});
+
+confirmSubmit.addEventListener('click', async () => {
+  if (!pendingSubmission) return;
+  confirmSubmit.disabled = true;
+  submitStatus.textContent = t('submitting_job');
+  try {
+    const response = await fetch('/api/submit', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Vista-CSRF': csrfToken,
+      },
+      body: JSON.stringify(pendingSubmission),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    if (data.job_id) {
+      submitStatus.innerHTML = `✅ <a class="job-link mono" href="/job/${encodeURIComponent(data.job_id)}">${esc(t('submitted_job', {jobid: data.job_id}))}</a>`;
+    } else {
+      submitStatus.textContent = `✅ ${t('submitted_unknown')}`;
+    }
+    pendingSubmission = null;
+    await refresh();
+  } catch (error) {
+    submitStatus.textContent = `${t('submit_failed')}: ${error.message || error}`;
+    confirmSubmit.disabled = false;
+  }
+});
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
@@ -1955,7 +2218,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):  # noqa: N802
-        if urlparse(self.path).path != "/api/cancel":
+        post_path = urlparse(self.path).path
+        if post_path not in {"/api/cancel", "/api/submit"}:
             self.send_error(404, "Not found")
             return
 
@@ -1983,6 +2247,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if not isinstance(payload, dict):
             self.send_json({"error": "JSON body must be an object"}, status=400)
+            return
+
+        if post_path == "/api/submit":
+            try:
+                result = request_job_submit(getpass.getuser(), payload)
+                self.send_json(result, status=202)
+            except ValueError as error:
+                self.send_json({"error": str(error)}, status=400)
+            except RuntimeError as error:
+                self.send_json({"error": str(error)}, status=500)
             return
 
         job_id = str(payload.get("job_id", ""))
