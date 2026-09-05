@@ -129,13 +129,30 @@ The installer does not submit a Slurm job. After installation, the user explicit
 vista-allocate [partition] [hours] [cursor|code|none]
 ```
 
+### How to read the placeholders and command examples
+
+The names below are documentation stand-ins, not universal TACC commands or values that should be typed literally:
+
+| Text in this README | What it means |
+|---|---|
+| `your-login-alias` | The short local SSH name chosen for `LOGIN_ALIAS`. It represents the Vista login host after installation; it is not necessarily a username or hostname. Replace it with the configured value before running a command. |
+| `your-compute-alias` | The stable local SSH name chosen for `COMPUTE_ALIAS`. The installer makes it jump through the login alias and point to whichever compute node the current Slurm allocation receives. Users do not manually replace it with the changing node hostname. |
+| `<REMOTE_PROJECT_DIR>` | The user's absolute shared directory on Vista. Angle brackets mark a value that must be replaced in the external configuration; do not type the brackets. The IDE opens this directory on the compute node. |
+| `<REPOSITORY_URL>` | The clone URL of this public repository. Replace the entire angle-bracket expression, including the brackets. |
+| `[partition]` | A command argument such as `gg`, `gh`, or `gh-dev`, subject to the user's account access. Square brackets in a command synopsis describe an argument; they are not typed. |
+| `[hours]` | Requested Slurm wall time in hours, for example `6`, within the selected partition's limit. |
+| `[cursor\|code\|none]` | Whether to open Cursor, open VS Code, or only prepare the compute SSH alias. |
+| `WINDOW` | A user-chosen label for one managed Codex window, such as `paper` or `analysis`; it is not an operating-system window ID. |
+
+An SSH alias is simply a convenient local name defined in `~/.ssh/config`. For example, after `LOGIN_ALIAS` has been configured, `ssh your-login-alias` means “replace `your-login-alias` with that chosen short name and let SSH read the real username, login endpoint, key path, and connection settings from its configuration.” The populated machine-specific values live outside this repository so they cannot be exposed by sharing the skill.
+
 ## Everyday operation after installation
 
 The following commands are run on the **local computer**, not inside the Vista login node.
 
 ### 1. Ensure that the reusable login connection exists
 
-Replace `your-login-alias` with the `LOGIN_ALIAS` chosen in the external configuration:
+Replace the literal text `your-login-alias` with the value of `LOGIN_ALIAS` chosen in the external configuration:
 
 ```bash
 ssh -O check your-login-alias 2>/dev/null || ssh -MNf your-login-alias
