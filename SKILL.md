@@ -64,6 +64,17 @@ The IDE SSH target must always be the compute alias after its allocation reaches
 
 `ControlPersist yes` has no configured expiry, but the master can still end after a reboot, process termination, socket removal, network or server disconnect, site policy action, or explicit closure. Losing the SSH master must not be described as cancelling a Slurm allocation; the two lifetimes are independent.
 
+## Normal operation
+
+Explain the post-install workflow with command locations made explicit:
+
+1. On the local computer, optionally pre-establish the reusable login master with `ssh -O check LOGIN_ALIAS 2>/dev/null || ssh -MNf LOGIN_ALIAS`. This prompts for fresh authentication only when no usable master exists.
+2. Still on the local computer, run `vista-allocate PARTITION HOURS cursor` (or `code`/`none`). Never tell the user to run this local wrapper from the login-node shell.
+3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the compute alias, and opens the configured project directory in an IDE whose SSH target is the compute alias.
+4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
+
+Also explain that pre-establishing the login master is optional because `vista-allocate` can trigger SSH authentication itself. An interactive `ssh LOGIN_ALIAS` may remain open, but the allocation wrapper still runs from a separate local terminal.
+
 ## Remote recovery
 
 The remote recovery command must refuse login nodes and enter the configured shared project directory. Treat each managed Codex window as a separate named tmux session, or a separate GNU screen session when tmux is unavailable. Persist only a restricted active marker and exact Codex session ID for each window outside the skill directory.

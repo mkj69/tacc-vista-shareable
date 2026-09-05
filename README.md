@@ -129,7 +129,74 @@ The installer does not submit a Slurm job. After installation, the user explicit
 vista-allocate [partition] [hours] [cursor|code|none]
 ```
 
-Once connected to a compute node, use the managed Codex windows:
+## Everyday operation after installation
+
+The following commands are run on the **local computer**, not inside the Vista login node.
+
+### 1. Ensure that the reusable login connection exists
+
+Replace `your-login-alias` with the `LOGIN_ALIAS` chosen in the external configuration:
+
+```bash
+ssh -O check your-login-alias 2>/dev/null || ssh -MNf your-login-alias
+```
+
+If the SSH master is already alive, the check succeeds and no new connection is opened. Otherwise, SSH starts a background master and asks the user for the password or multifactor token required by the site. The command then returns to the local shell, where `vista-allocate` is available.
+
+This preparation is recommended but optional. Running `vista-allocate` without it can establish the SSH connection itself and display the same authentication prompt. A user may also run an interactive `ssh your-login-alias`, but then `vista-allocate` must be run from a second **local** terminal—not from the login-node shell.
+
+### 2. Request a compute node and open the IDE
+
+For example, replace `partition-name` with one of the partitions allowed by that account:
+
+```bash
+vista-allocate partition-name 6 cursor
+```
+
+The final argument controls the launch:
+
+- `cursor` opens Cursor.
+- `code` opens VS Code.
+- `none` prepares the compute SSH alias without opening an IDE.
+
+The number `6` means six hours. The command performs the remaining work:
+
+```text
+submit or reuse the configured Slurm allocation
+  -> wait for that exact job to reach RUNNING
+  -> discover its assigned compute node
+  -> update the private compute SSH alias
+  -> connect the IDE to the compute node through ProxyJump
+  -> open the configured remote project directory
+```
+
+If the allocation is pending, leave the local command running; it waits until the node is ready. There is no need to copy the job ID, repeatedly run `squeue`, edit the node hostname, reconnect the IDE manually, or browse to the project directory again.
+
+After a successful launch, the IDE's remote terminal is running on the **compute node**. The login node remains only the authentication, scheduler, and jump layer.
+
+### 3. Optionally start or restore Codex on the compute node
+
+From the terminal inside the remote IDE:
+
+```bash
+~/start.sh
+```
+
+This optional command restores the managed Codex windows described below. Users who do not want managed recovery can instead start Codex normally or run `codex resume --all` themselves.
+
+### 4. Reconnect while the allocation is still active
+
+Running the same `vista-allocate` command again reuses the matching active allocation, refreshes the compute-node mapping, and opens another IDE window. To open only a terminal connection after the mapping is ready, use the configured compute alias:
+
+```bash
+ssh your-compute-alias
+```
+
+If the reusable login master has ended, SSH asks for fresh authentication. This does not mean the Slurm allocation was cancelled; SSH and Slurm have independent lifetimes.
+
+## Managed Codex window commands
+
+Once connected to a compute node, use these optional managed Codex commands:
 
 ```bash
 ~/start.sh --new paper       # create a new managed window
