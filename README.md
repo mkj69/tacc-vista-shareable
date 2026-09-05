@@ -6,6 +6,12 @@ The repository contains placeholders only. It does not include usernames, accoun
 
 ## News
 
+### 2026-09-05 — Guarded job cancellation in the dashboard
+
+Active-job rows and job-detail pages now include a **Cancel job** button. Because cancellation cannot be undone, the dashboard requires the user to type the complete Job ID before it sends the request. The server then verifies that the exact job is still active and belongs to the current Vista login user before calling `scancel`.
+
+The action uses a POST request protected by a per-process request token. The server refuses non-loopback binding, so the controls remain available only through the SSH-forwarded local dashboard. The common-command reference remains copy-only; the guarded active-job button is the dashboard's only scheduler-changing control.
+
 ### 2026-09-05 — Open an existing allocation without submitting
 
 The new `vista-open-all` command keeps allocation and IDE launch as separate operations:
@@ -28,6 +34,7 @@ The installer now adds `vista-dashboard-open` and a loopback-only Vista dashboar
 - per-node CPU utilization, used memory, memory percentage, and load curves, alongside separately labeled Slurm job-level CPU time and MaxRSS;
 - zero lines when a metric is unused or unavailable;
 - Chinese/English switching, persistent expanded details, and five-second polling;
+- a guarded cancellation button for active jobs, with typed Job ID confirmation and current-user ownership checks;
 - a common-command page with copy-only examples for local SSH, allocation, queue inspection, submission, cancellation, monitoring, and Codex recovery.
 
 Charts begin sampling when a job detail page opens. Recent samples stay in that browser, so telemetry that was never sampled cannot be reconstructed later. The dashboard runs on the login node because its GPU inspection path launches a short overlapping step inside an existing running allocation; the IDE still connects to the compute node. The server binds only to remote loopback and is reached through the reusable SSH login connection.
@@ -372,6 +379,8 @@ Run the isolated package test without connecting to Vista:
 The homepage intentionally avoids launching `nvidia-smi` for every job. Click **View CPU/GPU charts** beside an active or historical job to open its detail page. CPU and memory come from Slurm `sstat`. CPU utilization is calculated from the change in cumulative CPU time between samples and normalized by the allocated CPU count. GPU sampling runs only for a running job whose TRES data reports a GPU allocation; CPU-only jobs still display zero-valued GPU charts.
 
 Automatic polling updates values without collapsing opened details or changing the selected language. The language preference is stored in both browser storage and a cookie so it also survives a change between local forwarding ports. A cancelled job is removed from the active table and merged into recent terminal history, including a never-started cancellation that Slurm's time-range accounting query may otherwise omit.
+
+To cancel an active job from the dashboard, click **Cancel job**, then type the complete Job ID shown beside the button. Closing the prompt or entering anything else makes no change. A successful response means the dashboard submitted a cancellation request to Slurm; the next refresh reflects the scheduler's resulting state. Cancellation is destructive and cannot resume the stopped process, so use it only for the intended Job ID.
 
 ## Repository contents
 

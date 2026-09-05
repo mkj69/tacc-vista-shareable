@@ -54,7 +54,7 @@ The generated node include starts with a non-routable placeholder hostname. Afte
 - Submit helper: read the scheduler account, job label, partition limits, and output location from external configuration; submit the requested node count with one task per node; return a clean numeric ID even if the site prints a banner. Reuse only an allocation whose partition, wall time, and node count all match.
 - Resolver: accept an exact job ID, return only a running node, and use distinct statuses for “wait” and “job unavailable.”
 - Recovery launcher: reject login nodes, enter `<REMOTE_PROJECT_DIR>`, create one named tmux/screen session per managed Codex window, bind it to an exact Codex session ID, and restore every window whose active marker survived the previous node.
-- Dashboard service: run only on a login node, bind to loopback, query Slurm read-only for home/detail pages, and launch short overlapping GPU inspection steps only for running GPU allocations.
+- Dashboard service: run only on a login node and bind to loopback. Keep home/detail queries read-only and launch short overlapping GPU inspection steps only for running GPU allocations. Allow cancellation only through the guarded active-job POST endpoint: require the per-process request token, exact typed Job ID confirmation, current OS user ownership, and an exact active `squeue` match before calling `scancel` with an argument list.
 
 ## Managed Codex window lifecycle
 

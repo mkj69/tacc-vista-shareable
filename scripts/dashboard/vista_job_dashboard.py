@@ -9,14 +9,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import re
+import secrets
 import shutil
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
+
+
+DASHBOARD_CSRF_TOKEN = secrets.token_urlsafe(32)
+SLURM_JOB_ID_PATTERN = re.compile(r"[0-9]+(?:_[0-9]+|_\[[0-9,%-]+\])?")
 
 
 def run_cmd(cmd: list[str], timeout: int = 15) -> str:
@@ -289,6 +295,30 @@ def list_jobs(
         lower = job_name.lower()
         jobs = [j for j in jobs if lower in j["name"].lower()]
     return jobs
+
+
+def request_job_cancel(user: str, job_id: str) -> dict[str, str]:
+    """Request cancellation only for an exact active job owned by the dashboard user."""
+    if not SLURM_JOB_ID_PATTERN.fullmatch(job_id):
+        raise ValueError("Invalid Slurm job ID")
+
+    active_jobs = list_jobs(
+        user=user,
+        partitions=None,
+        job_name=None,
+        states="",
+        job_id=job_id,
+    )
+    exact_job = next((job for job in active_jobs if job.get("jobid") == job_id), None)
+    if exact_job is None:
+        raise LookupError(f"Active job {job_id} was not found for the current user")
+
+    run_cmd(["scancel", "--user", user, job_id], timeout=15)
+    return {
+        "job_id": job_id,
+        "previous_state": exact_job.get("state", "UNKNOWN"),
+        "message": f"Cancellation requested for job {job_id}",
+    }
 
 
 HISTORY_FIELDS = [
@@ -913,7 +943,7 @@ def collect_all(
 
 
 def dashboard_html() -> str:
-    return r"""<!doctype html>
+    html = r"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
@@ -964,6 +994,9 @@ def dashboard_html() -> str:
   .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .button { color:var(--text); background:#21262d; border:1px solid #4b5563; border-radius:6px; padding:7px 11px; cursor:pointer; text-decoration:none; }
   .button:hover { border-color:#58a6ff; }
+  .button:disabled { cursor:not-allowed; opacity:.55; }
+  .button-danger { color:#ffb3ad; border-color:#a33a3a; background:#32191b; }
+  .button-danger:hover { border-color:#f85149; background:#431d20; }
   .job-link { color:#79c0ff; text-decoration:none; }
   .job-link:hover { text-decoration:underline; }
   .chart-link { display:inline-block; margin-top:7px; padding:5px 8px; font-size:12px; }
@@ -1047,6 +1080,7 @@ def dashboard_html() -> str:
 </div>
 <script>
 const params = new URLSearchParams(window.location.search);
+const csrfToken = '__DASHBOARD_CSRF_TOKEN__';
 const interval = parseInt(params.get('interval') || '5', 10);
 const commandPage = window.location.pathname === '/commands' || window.location.pathname === '/commands/';
 const jobMatch = window.location.pathname.match(/^\/job\/(.+)$/);
@@ -1083,8 +1117,10 @@ const I18N = {
     commands_title:'Vista 常用命令', commands_intro:'按运行位置整理；点击复制后粘贴到对应终端。复制按钮不会自动执行命令。',
     commands_flow:'Mac 本地终端 → Vista 登录节点 → Slurm 调度 → 计算节点 / IDE',
     placeholder_note:'使用前请把 JOB_ID、your-job.sbatch 和 WINDOW_NAME 等占位符替换成实际值。sbatch、scancel、scontrol update 会改变作业状态，请确认后再执行。',
-    copy:'复制', copied:'已复制', view_charts:'查看 CPU/GPU 图表',
-    gpu_page_hint:'📈 点击作业旁的“查看 CPU/GPU 图表”进入真实折线图页面。'
+    copy:'复制', copied:'已复制', view_charts:'查看 CPU/GPU 图表', cancel_job:'取消任务',
+    cancelling:'正在请求取消…', cancel_prompt:'危险操作：取消后任务无法恢复。请输入完整 Job ID {jobid} 以确认：',
+    cancel_mismatch:'输入的 Job ID 不匹配，未取消任务。', cancel_requested:'已向 Slurm 请求取消任务 {jobid}。',
+    cancel_failed:'取消失败', gpu_page_hint:'📈 点击作业旁的“查看 CPU/GPU 图表”进入真实折线图页面。'
   },
   en: {
     all_jobs:'All jobs', dashboard_title:'Vista Jobs, CPU & GPU Dashboard', auto_refresh:'Auto refresh',
@@ -1111,8 +1147,10 @@ const I18N = {
     commands_title:'Common Vista Commands', commands_intro:'Organized by where each command runs. Copy, then paste into the matching terminal; copying never executes it.',
     commands_flow:'Local Mac terminal → Vista login node → Slurm scheduler → Compute node / IDE',
     placeholder_note:'Replace placeholders such as JOB_ID, your-job.sbatch, and WINDOW_NAME before use. sbatch, scancel, and scontrol update change job state; verify before running them.',
-    copy:'Copy', copied:'Copied', view_charts:'View CPU/GPU charts',
-    gpu_page_hint:'📈 Use “View CPU/GPU charts” beside a job to open its real line-chart page.'
+    copy:'Copy', copied:'Copied', view_charts:'View CPU/GPU charts', cancel_job:'Cancel job',
+    cancelling:'Requesting cancellation…', cancel_prompt:'Destructive action: cancellation cannot be undone. Type the full Job ID {jobid} to confirm:',
+    cancel_mismatch:'The Job ID did not match. Nothing was cancelled.', cancel_requested:'Slurm cancellation requested for job {jobid}.',
+    cancel_failed:'Cancellation failed', gpu_page_hint:'📈 Use “View CPU/GPU charts” beside a job to open its real line-chart page.'
   }
 };
 function readLanguagePreference() {
@@ -1396,6 +1434,11 @@ function makeBadge(state) {
   return `<span class="pill ${statusClass(s)}">${esc(s)}</span>`;
 }
 
+function isActiveJobState(state) {
+  const normalized = String(state || '').split(/[+\s]/, 1)[0];
+  return ['PD', 'R', 'CF', 'CG', 'S', 'ST', 'PENDING', 'RUNNING', 'CONFIGURING', 'COMPLETING', 'SUSPENDED', 'STOPPED'].includes(normalized);
+}
+
 function fullSlurmDetails(job, context = 'job') {
   const details = job.slurm_details || {};
   const entries = Object.entries(details).sort(([a], [b]) => a.localeCompare(b));
@@ -1403,6 +1446,46 @@ function fullSlurmDetails(job, context = 'job') {
   return `<details data-persist-key="${esc(`${context}:${job.jobid}:slurm`)}"><summary>${esc(t('full_fields', {count: entries.length}))}</summary>
     <div class="raw-grid">${kvRows(entries)}</div></details>`;
 }
+
+async function cancelJob(button) {
+  const jobId = String(button.dataset.jobId || '');
+  const confirmation = window.prompt(t('cancel_prompt', {jobid: jobId}), '');
+  if (confirmation === null) return;
+  if (confirmation.trim() !== jobId) {
+    window.alert(t('cancel_mismatch'));
+    return;
+  }
+
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = t('cancelling');
+  try {
+    const response = await fetch('/api/cancel', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Vista-CSRF': csrfToken,
+      },
+      body: JSON.stringify({job_id: jobId, confirmation: confirmation.trim()}),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    window.alert(t('cancel_requested', {jobid: jobId}));
+    if (detailJobId) await refreshJob();
+    else await refresh();
+  } catch (error) {
+    window.alert(`${t('cancel_failed')}: ${error.message || error}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('.cancel-job');
+  if (button) cancelJob(button);
+});
 
 function rowFor(job) {
   const gpulist = (job.gpu && job.gpu.metrics) || [];
@@ -1466,6 +1549,7 @@ function rowFor(job) {
     <td>
       <div>${shown(job.status_icon, '')} ${makeBadge(job.state)} <a class="job-link mono" href="/job/${encodeURIComponent(job.jobid)}">${shown(job.jobid)}</a></div>
       <a class="button chart-link" href="/job/${encodeURIComponent(job.jobid)}">📈 ${esc(t('view_charts'))}</a>
+      <button class="button button-danger chart-link cancel-job" type="button" data-job-id="${esc(job.jobid)}">🛑 ${esc(t('cancel_job'))}</button>
       <div class="small mono">name=${shown(job.name)}</div>
       <div class="small mono">${esc(t('priority'))}: ${shown(job.priority)}</div>
       <div class="small">${esc(t('submit'))}: ${shown(job.submit_time)}<br>${esc(t('start'))}: ${shown(job.start_time)}</div>
@@ -1793,6 +1877,9 @@ function renderJobDetail(job) {
   latestDetailJob = job;
   const reasonText = job.reason_detail || job.reason || 'N/A';
   const estimate = job.estimated_start && !['N/A', 'Unknown'].includes(job.estimated_start) ? job.estimated_start : t('unavailable');
+  const cancelControl = isActiveJobState(job.state)
+    ? `<div style="margin-bottom:12px"><button class="button button-danger cancel-job" type="button" data-job-id="${esc(job.jobid)}">🛑 ${esc(t('cancel_job'))}</button></div>`
+    : '';
   document.title = `Job ${job.jobid} · Vista`;
   document.getElementById('job-title').innerHTML = `${shown(job.status_icon, '')} Job ${shown(job.jobid)} · ${shown(job.name)}`;
   document.getElementById('job-headline').innerHTML = [
@@ -1800,6 +1887,7 @@ function renderJobDetail(job) {
     [metricTitle('已运行','Elapsed'), job.used], [t('remaining'), job.wall_left], [metricTitle('节点','Node'), job.nodes]
   ].map(([label, value]) => `<div class="stat"><div class="stat-value" style="font-size:16px">${shown(value)}</div><div class="small">${esc(label)}</div></div>`).join('');
   document.getElementById('job-overview').innerHTML = `
+    ${cancelControl}
     <div class="detail-grid">
       <section class="detail-box"><h3>⏱ ${esc(t('sched_times'))}</h3>${kvRows([
         [t('submit'), job.submit_time], ['Eligible', job.eligible_time], ['Accrue', job.accrue_time],
@@ -1853,6 +1941,7 @@ if (commandPage) {
 </script>
 </body>
 </html>"""
+    return html.replace("__DASHBOARD_CSRF_TOKEN__", DASHBOARD_CSRF_TOKEN)
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -1865,18 +1954,62 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):  # noqa: N802
+        if urlparse(self.path).path != "/api/cancel":
+            self.send_error(404, "Not found")
+            return
+
+        supplied_token = self.headers.get("X-Vista-CSRF", "")
+        if not secrets.compare_digest(supplied_token, DASHBOARD_CSRF_TOKEN):
+            self.send_json({"error": "Invalid request token"}, status=403)
+            return
+
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self.send_json({"error": "Content-Type must be application/json"}, status=415)
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = -1
+        if content_length < 1 or content_length > 4096:
+            self.send_json({"error": "Invalid request size"}, status=400)
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(content_length))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_json({"error": "Invalid JSON body"}, status=400)
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"error": "JSON body must be an object"}, status=400)
+            return
+
+        job_id = str(payload.get("job_id", ""))
+        confirmation = str(payload.get("confirmation", ""))
+        if confirmation != job_id:
+            self.send_json({"error": "Confirmation must exactly match the Job ID"}, status=400)
+            return
+        try:
+            result = request_job_cancel(getpass.getuser(), job_id)
+            self.send_json(result, status=202)
+        except ValueError as error:
+            self.send_json({"error": str(error)}, status=400)
+        except LookupError as error:
+            self.send_json({"error": str(error)}, status=404)
+        except RuntimeError as error:
+            self.send_json({"error": str(error)}, status=500)
+
     def do_GET(self):  # noqa: N802
         if self.path.startswith("/api/job/"):
             parsed = urlparse(self.path)
             job_id = unquote(parsed.path.removeprefix("/api/job/"))
-            if not re.fullmatch(r"[0-9]+(?:_[0-9]+|_\[[0-9,%-]+\])?", job_id):
+            if not SLURM_JOB_ID_PATTERN.fullmatch(job_id):
                 self.send_json({"error": "Invalid Slurm job ID"}, status=400)
                 return
             q = parse_qs(parsed.query)
             user = q.get("user", [None])[0]
             if not user:
-                import getpass
-
                 user = getpass.getuser()
             try:
                 active = collect_all(
@@ -1907,8 +2040,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             parts = q.get("partitions", [None])[0]
             job_name = q.get("job", [None])[0]
             if not user:
-                import getpass
-
                 user = getpass.getuser()
 
             partitions = [p for p in (parts or "").split(",") if p]
@@ -1994,6 +2125,9 @@ def main() -> None:
     parser.add_argument("--job", "--job-name", dest="job", default=None, help="Filter by substring in slurm job name")
     parser.add_argument("--interval", type=int, default=5)
     args = parser.parse_args()
+
+    if args.bind not in {"127.0.0.1", "::1", "localhost"}:
+        parser.error("The dashboard has job controls and must bind to loopback only")
 
     parts = [p.strip() for p in (args.partitions or "").split(",") if p.strip()]
     initial_url = (
