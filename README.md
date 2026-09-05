@@ -6,6 +6,17 @@ The repository contains placeholders only. It does not include usernames, accoun
 
 ## News
 
+### 2026-09-05 — Open an existing allocation without submitting
+
+The new `vista-open-all` command keeps allocation and IDE launch as separate operations:
+
+```bash
+vista-open-all JOB_ID code
+vista-open-all JOB_ID cursor
+```
+
+It resolves only the supplied existing Job ID, refreshes that allocation's private per-node SSH aliases, and opens one IDE window per allocated node. It has no Slurm submission path: if the Job ID is unavailable, it fails instead of creating another allocation.
+
 ### 2026-09-05 — CPU/GPU job dashboard
 
 The installer now adds `vista-dashboard-open` and a loopback-only Vista dashboard. When an allocation reaches `RUNNING`, the wrapper opens the dashboard and then the requested IDE. The dashboard includes:
@@ -77,6 +88,7 @@ This skill turns those moving pieces into two stable entry points:
 
 ```text
 local computer:  vista-allocate [partition] [hours] [nodes] [IDE]
+local computer:  vista-open-all JOB_ID [IDE]  # existing job only
 compute node:    ~/start.sh
 ```
 
@@ -179,6 +191,12 @@ The installer does not submit a Slurm job. After installation, the user explicit
 vista-allocate [partition] [hours] [nodes] [cursor|code|cursor-all|code-all|none]
 ```
 
+To open every node of an existing allocation without any submission fallback:
+
+```bash
+vista-open-all JOB_ID [cursor|code]
+```
+
 The dashboard opens automatically when an IDE is requested. It can also be opened independently:
 
 ```bash
@@ -199,6 +217,7 @@ The names below are documentation stand-ins, not universal TACC commands or valu
 | `[hours]` | Requested Slurm wall time in hours, for example `6`, within the selected partition's limit. |
 | `[nodes]` | Optional positive node count. Omit it for one node. A numeric third argument is interpreted as nodes; configured per-partition limits are enforced. |
 | `[cursor\|code\|cursor-all\|code-all\|none]` | Open one Cursor/VS Code window, open one window per allocated node, or only prepare the compute SSH aliases. |
+| `JOB_ID` | The numeric ID of an existing Slurm allocation. `vista-open-all` never replaces a missing or finished Job ID with a new submission. |
 | `WINDOW` | A user-chosen label for one managed Codex window, such as `paper` or `analysis`; it is not an operating-system window ID. |
 
 An SSH alias is simply a convenient local name defined in `~/.ssh/config`. For example, after `LOGIN_ALIAS` has been configured, `ssh your-login-alias` means “replace `your-login-alias` with that chosen short name and let SSH read the real username, login endpoint, key path, and connection settings from its configuration.” The populated machine-specific values live outside this repository so they cannot be exposed by sharing the skill.
@@ -302,6 +321,8 @@ After a successful launch, the IDE's remote terminal is running on the **compute
 
 For each allocation, the wrapper creates a primary allocation-specific alias for the first hostname plus numbered aliases for every hostname in Slurm's assigned nodelist. The ordinary `cursor` and `code` modes open one IDE window through the primary alias. The `cursor-all` and `code-all` modes open one window per numbered node alias. Each terminal still runs on only the node shown by that window; opening every node is convenient for inspection but does not replace a supported distributed launcher. Allocation-specific aliases remain separate, so opening another allocation does not redirect an earlier `gh` or `gg` window.
 
+If the allocation already exists and no new submission is desired under any circumstance, use `vista-open-all JOB_ID code` or `vista-open-all JOB_ID cursor` from the local computer. Unlike `vista-allocate`, this command has no “submit when no exact match exists” behavior. It exits if the specified job is unavailable.
+
 ### 3. Optionally start or restore Codex on the compute node
 
 From the terminal inside the remote IDE:
@@ -364,6 +385,7 @@ scripts/install.sh
 scripts/doctor.sh
 scripts/common.sh
 scripts/local/vista-allocate
+scripts/local/vista-open-all
 scripts/local/vista-node-update.sh
 scripts/local/vista-dashboard-open
 scripts/remote/submit-node.sh

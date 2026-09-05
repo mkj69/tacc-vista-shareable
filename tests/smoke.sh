@@ -35,6 +35,7 @@ HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$repo_dir/scripts/install.sh
 HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$repo_dir/scripts/install.sh" --local-only >/dev/null
 bash -n \
     "$test_home/.local/bin/vista-allocate" \
+    "$test_home/.local/bin/vista-open-all" \
     "$test_home/.local/bin/vista-node-update.sh" \
     "$test_home/.local/bin/vista-dashboard-open" \
     "$test_home/.local/lib/tacc-vista/common.sh" \
@@ -66,7 +67,11 @@ cat >"$fake_bin/ssh" <<'FAKESSH'
 #!/bin/bash
 printf '%s\n' compute-a.invalid compute-b.invalid
 FAKESSH
-chmod +x "$fake_bin/ssh"
+cat >"$fake_bin/code" <<'FAKECODE'
+#!/bin/bash
+printf '%s\n' "$*" >>"$TEST_CODE_LOG"
+FAKECODE
+chmod +x "$fake_bin/ssh" "$fake_bin/code"
 PATH="$fake_bin:$PATH" HOME="$test_home" TACC_VISTA_CONFIG="$config_file" \
     "$test_home/.local/bin/vista-node-update.sh" 12345 >/dev/null
 grep -Fq 'Host compute-test-12345' "$test_home/.ssh/tacc-vista/allocations/12345.conf"
@@ -74,6 +79,16 @@ grep -Fq 'Host compute-test-12345-n1' "$test_home/.ssh/tacc-vista/allocations/12
 grep -Fq 'Host compute-test-12345-n2' "$test_home/.ssh/tacc-vista/allocations/12345.conf"
 grep -Fxq 'compute-test-12345-n1' "$test_home/.ssh/tacc-vista/allocations/12345.alias"
 grep -Fxq 'compute-test-12345-n2' "$test_home/.ssh/tacc-vista/allocations/12345.alias"
+code_log="$test_root/code.log"
+PATH="$fake_bin:$PATH" HOME="$test_home" TACC_VISTA_CONFIG="$config_file" TEST_CODE_LOG="$code_log" \
+    "$test_home/.local/bin/vista-open-all" 12345 code >/dev/null
+test "$(wc -l <"$code_log" | tr -d ' ')" -eq 2
+grep -Fq 'ssh-remote+compute-test-12345-n1/shared/test-project' "$code_log"
+grep -Fq 'ssh-remote+compute-test-12345-n2/shared/test-project' "$code_log"
+if grep -Eq 'submit-node|sbatch' "$repo_dir/scripts/local/vista-open-all"; then
+    printf '%s\n' 'Open-only helper must not contain a submission path.' >&2
+    exit 1
+fi
 if HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vista-allocate" invalid 1 none >/dev/null 2>&1; then
     printf '%s\n' 'Expected invalid partition validation to fail.' >&2
     exit 1
@@ -90,6 +105,7 @@ grep -Fq 'allocation_alias="${COMPUTE_ALIAS}-${job_id}"' "$repo_dir/scripts/loca
 grep -Fq 'allocation_alias="${COMPUTE_ALIAS}-${job_id}"' "$repo_dir/scripts/local/vista-node-update.sh"
 grep -Fq 'cursor-all' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'code-all' "$repo_dir/scripts/local/vista-allocate"
+grep -Fq 'no Slurm job will be submitted' "$repo_dir/scripts/local/vista-open-all"
 grep -Fq "remote_command+=\" '\$job_id' all\"" "$repo_dir/scripts/local/vista-node-update.sh"
 grep -Fq 'vista-dashboard-open' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'ssh -O forward' "$repo_dir/scripts/local/vista-dashboard-open"

@@ -38,6 +38,7 @@ Store non-secret machine-specific settings in a local configuration outside the 
 - For first-time setup or migration, copy the supplied placeholder template, collect only missing non-secret values, and then follow the reference.
 - For normal operation, use the configured login and compute aliases instead of expanding their underlying identities in commands or responses.
 - Keep allocation and IDE automation on the local machine.
+- Use `vista-open-all JOB_ID [cursor|code]` when every node of an existing allocation should open without any possibility of submitting another job.
 - Keep Codex/tmux recovery on the remote compute node.
 - For diagnosis, inspect state read-only first and avoid reproducing identifiers in the answer.
 
@@ -95,6 +96,8 @@ Explain the post-install workflow with command locations made explicit:
 2. Still on the local computer, run `vista-allocate PARTITION HOURS NODES cursor` (or `code`, `cursor-all`, `code-all`, or `none`). Omit `NODES` for a one-node allocation; preserve the legacy `vista-allocate PARTITION HOURS EDITOR` form. Never tell the user to run this local wrapper from the login-node shell.
 3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the base compute alias, creates allocation- and node-specific aliases in private local state, opens the dashboard through the login master, and opens the requested IDE window or windows.
 4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
+
+Keep `vista-open-all JOB_ID [cursor|code]` separate from `vista-allocate`. It must accept only an explicit existing numeric Job ID, resolve that job, refresh its private per-node aliases, and open one window per node. It must never call an allocation submit helper or fall back to creating a job when the ID is missing, finished, or invalid. It may wait when that exact existing job is pending.
 
 For a multi-node allocation, resolve the entire Slurm nodelist. Keep `cursor` and `code` as the safe default that opens one window on the first node. Support explicit `cursor-all` and `code-all` modes that open one window for each numbered node alias. Preserve earlier allocation-specific aliases so simultaneous allocations can keep separate IDE windows and reconnect without a later invocation redirecting them. Explain that several open terminals do not automatically coordinate a distributed workload or use every accelerator; use an allocation-aware launcher for that.
 

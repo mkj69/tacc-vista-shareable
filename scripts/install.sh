@@ -72,6 +72,7 @@ chmod 700 "$ssh_dir" "$state_dir" "$local_bin" "$local_lib"
 
 install -m 700 "$script_dir/common.sh" "$local_lib/common.sh"
 install -m 700 "$script_dir/local/vista-allocate" "$local_bin/vista-allocate"
+install -m 700 "$script_dir/local/vista-open-all" "$local_bin/vista-open-all"
 install -m 700 "$script_dir/local/vista-node-update.sh" "$local_bin/vista-node-update.sh"
 install -m 700 "$script_dir/local/vista-dashboard-open" "$local_bin/vista-dashboard-open"
 
@@ -199,6 +200,7 @@ trap - EXIT
 cleanup
 printf '%s\n' 'TACC Vista helpers installed successfully.'
 printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [nodes] [cursor|code|cursor-all|code-all|none]'
+printf '%s\n' 'Open every node of an existing job without submitting: vista-open-all JOB_ID [cursor|code]'
 printf '%s\n' 'Open the monitoring dashboard separately with: vista-dashboard-open'
 if (( remote_install )); then
     printf '%s\n' 'On a compute node, run: ~/start.sh'

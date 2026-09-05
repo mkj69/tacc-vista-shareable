@@ -1,0 +1,81 @@
+#!/bin/bash
+set -euo pipefail
+
+lib_dir="$HOME/.local/lib/tacc-vista"
+# shellcheck source=/dev/null
+source "$lib_dir/common.sh"
+load_config
+require_config_vars COMPUTE_ALIAS REMOTE_PROJECT_DIR PREFERRED_IDE
+
+job_id="${1:-}"
+editor="${2:-$PREFERRED_IDE}"
+if [[ ! "$job_id" =~ ^[0-9]+$ ]] || (( $# > 2 )); then
+    printf 'Usage: vista-open-all JOB_ID [cursor|code]\n' >&2
+    exit 2
+fi
+
+case "$editor" in
+    cursor)
+        editor_cli="$(command -v cursor || true)"
+        if [[ -z "$editor_cli" && -x '/Applications/Cursor.app/Contents/Resources/app/bin/cursor' ]]; then
+            editor_cli='/Applications/Cursor.app/Contents/Resources/app/bin/cursor'
+        fi
+        editor_name='Cursor'
+        ;;
+    code|vscode)
+        editor=code
+        editor_cli="$(command -v code || true)"
+        if [[ -z "$editor_cli" && -x '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' ]]; then
+            editor_cli='/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+        fi
+        editor_name='VS Code'
+        ;;
+    *)
+        printf '%s\n' 'Editor must be cursor or code.' >&2
+        exit 2
+        ;;
+esac
+if [[ -z "$editor_cli" ]]; then
+    printf '%s command was not found.\n' "$editor_name" >&2
+    exit 1
+fi
+
+# Deliberately resolve only the supplied existing job. There is no allocation
+# submission path in this command.
+"$HOME/.local/bin/vista-node-update.sh" "$job_id"
+
+alias_file="$HOME/.ssh/tacc-vista/allocations/$job_id.alias"
+if [[ ! -r "$alias_file" ]]; then
+    printf '%s\n' 'No per-node aliases were generated for the allocation.' >&2
+    exit 1
+fi
+
+node_aliases=()
+while IFS= read -r node_alias; do
+    [[ -z "$node_alias" ]] && continue
+    if [[ ! "$node_alias" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        printf '%s\n' 'A generated compute alias is invalid.' >&2
+        exit 1
+    fi
+    node_aliases+=("$node_alias")
+done <"$alias_file"
+if (( ${#node_aliases[@]} == 0 )); then
+    printf '%s\n' 'The allocation has no resolved compute nodes.' >&2
+    exit 1
+fi
+
+remote_path="$REMOTE_PROJECT_DIR"
+if command -v python3 >/dev/null 2>&1; then
+    remote_path="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$REMOTE_PROJECT_DIR")"
+fi
+
+printf 'Opening %s existing node(s) in %s; no Slurm job will be submitted.\n' \
+    "${#node_aliases[@]}" "$editor_name"
+for node_alias in "${node_aliases[@]}"; do
+    remote_uri="vscode-remote://ssh-remote+${node_alias}${remote_path}"
+    if [[ "$editor" == cursor ]]; then
+        "$editor_cli" --classic --new-window --folder-uri "$remote_uri"
+    else
+        "$editor_cli" --new-window --folder-uri "$remote_uri"
+    fi
+done

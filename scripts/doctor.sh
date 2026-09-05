@@ -55,6 +55,7 @@ fi
 
 for path in \
     "$HOME/.local/bin/vista-allocate" \
+    "$HOME/.local/bin/vista-open-all" \
     "$HOME/.local/bin/vista-node-update.sh" \
     "$HOME/.local/bin/vista-dashboard-open" \
     "$HOME/.local/lib/tacc-vista/common.sh" \
