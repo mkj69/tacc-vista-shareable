@@ -74,6 +74,23 @@ SHARED STORAGE
 
 An SSH or IDE disconnect does not cancel the Slurm allocation. A new node gets a new tmux/screen server, while the helper reconstructs the managed Codex windows from shared state. Training or Python processes require their own checkpoint support.
 
+## When the compute-node time expires
+
+When the Slurm wall time ends, access to that compute node ends and its running Codex processes and tmux/screen server disappear. An SSH or IDE connection cannot keep them alive past the allocation. This is different from briefly disconnecting SSH while the allocation is still running: tmux/screen can survive the brief disconnect, but it cannot survive the loss of the compute node itself.
+
+If `CODEX_HOME` and the project are on shared storage, the saved Codex conversations and project files are still available from the next compute node. The user can always recover a conversation manually without using the managed-window feature:
+
+```bash
+cd <REMOTE_PROJECT_DIR>
+codex resume --all
+```
+
+The user can then choose the previous conversation from the Codex picker. This works one conversation at a time and is a perfectly valid option.
+
+`~/start.sh` is an optional convenience layer. It remembers which managed Codex windows were still active, recreates their new tmux/screen containers on the replacement compute node, resumes their exact saved sessions, and attaches one of them. Users who prefer manual recovery can skip `start.sh`; node allocation, SSH jumping, and IDE connection still work independently.
+
+Neither method restores the old compute node's process memory. Unsaved in-memory work, running shells, Python programs, and training processes require application-level checkpoints or saved files.
+
 ## Install
 
 Clone the repository into the Codex skills directory:

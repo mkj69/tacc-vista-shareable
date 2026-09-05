@@ -74,6 +74,8 @@ Do not use `codex resume --last` for a multi-window workflow. Bind each managed 
 
 A new compute node requires a new tmux/screen server. Shared files and Codex session records remain available; running applications resume only through their own checkpoint mechanisms.
 
+Treat `~/start.sh` as optional convenience, not a prerequisite for allocation, SSH jumping, or IDE access. When the compute allocation expires, explain that the old Codex processes and tmux/screen server end with the node. A user may instead enter the shared project directory on the next node and run `codex resume --all` manually. The managed launcher automates reconstructing multiple active windows; it does not restore process memory.
+
 ## Verification
 
 Validate shell syntax and SSH configuration without echoing resolved identities. Test the login path and compute path separately. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.
