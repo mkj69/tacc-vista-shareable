@@ -145,6 +145,33 @@ If the SSH master is already alive, the check succeeds and no new connection is 
 
 This preparation is recommended but optional. Running `vista-allocate` without it can establish the SSH connection itself and display the same authentication prompt. A user may also run an interactive `ssh your-login-alias`, but then `vista-allocate` must be run from a second **local** terminal—not from the login-node shell.
 
+#### When the reusable SSH connection ends
+
+`ControlPersist yes` means that OpenSSH does not apply a configured idle-expiration time to the background master. It does **not** make the underlying TCP connection permanent or automatically recreate it after a failure. The master can still end when:
+
+- the local computer sleeps, closes its lid, logs out, restarts, or shuts down;
+- Wi-Fi, VPN, network interfaces, IP addresses, or upstream routing change;
+- a router or NAT gateway removes the idle TCP connection;
+- the local SSH process is terminated or its control socket is removed;
+- the login server closes the connection, restarts, or enforces a site policy;
+- the user explicitly runs `ssh -O exit your-login-alias`.
+
+Short network interruptions may survive, but this is not guaranteed. SSH keepalives help detect a broken connection; they cannot keep the network active while a computer is asleep or bypass fresh multifactor authentication.
+
+Check the master after waking the computer with:
+
+```bash
+ssh -O check your-login-alias
+```
+
+If it is gone, recreate it and enter a fresh token when prompted:
+
+```bash
+ssh -MNf your-login-alias
+```
+
+This SSH lifetime is independent of the Slurm allocation. Losing the master does not cancel a running compute-node allocation. Running `vista-allocate` again can authenticate, rediscover or reuse the active allocation, refresh the compute alias, and reopen the IDE.
+
 ### 2. Request a compute node and open the IDE
 
 Vista currently documents three primary partitions:
