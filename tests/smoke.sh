@@ -49,6 +49,10 @@ bash -n \
     "$repo_dir/scripts/remote/dashboard-start.sh"
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 PYTHONPYCACHEPREFIX="$test_root/pycache" python3 "$repo_dir/tests/test_dashboard_controls.py"
+test -s "$repo_dir/assets/screenshots/dashboard-visual-submit.png"
+test -s "$repo_dir/assets/screenshots/dashboard-guarded-cancel.png"
+grep -Fq 'assets/screenshots/dashboard-visual-submit.png' "$repo_dir/README.md"
+grep -Fq 'assets/screenshots/dashboard-guarded-cancel.png' "$repo_dir/README.md"
 rendered_dashboard="$test_root/rendered-dashboard.py"
 sed -e 's/__LOGIN_ALIAS__/login-test/g' -e 's/__COMPUTE_ALIAS__/compute-test/g' \
     "$repo_dir/scripts/dashboard/vista_job_dashboard.py" >"$rendered_dashboard"

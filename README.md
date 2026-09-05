@@ -12,11 +12,19 @@ The dashboard header now contains a collapsible **Submit a new job** form. It ac
 
 Submission is deliberately two-step: **Review submission** displays an argument-style preview, and **Confirm job submission** creates the real job. The server validates every field, requires a readable absolute script path, calls `sbatch --parsable` without a shell, and uses a request ID to prevent an accidental double click from creating duplicate jobs. The endpoint is protected by the dashboard request token and loopback-only SSH tunnel. The form does not upload or edit scripts.
 
+![Synthetic Vista dashboard example showing the visual Slurm submission form and review step](assets/screenshots/dashboard-visual-submit.png)
+
+_Synthetic placeholder data only; no real user, allocation, path, or job information is shown._
+
 ### 2026-09-05 — Guarded job cancellation in the dashboard
 
 Active-job rows and job-detail pages now include a **Cancel job** button. Because cancellation cannot be undone, the dashboard requires the user to type the complete Job ID before it sends the request. The server then verifies that the exact job is still active and belongs to the current Vista login user before calling `scancel`.
 
-The action uses a POST request protected by a per-process request token. The server refuses non-loopback binding, so the controls remain available only through the SSH-forwarded local dashboard. The common-command reference remains copy-only; the guarded active-job button is the dashboard's only scheduler-changing control.
+The action uses a POST request protected by a per-process request token. The server refuses non-loopback binding, so the controls remain available only through the SSH-forwarded local dashboard. The common-command reference remains copy-only; the visual submission form and guarded active-job cancellation button are the dashboard's only scheduler-changing controls.
+
+![Synthetic Vista dashboard example showing guarded cancellation and typed Job ID confirmation](assets/screenshots/dashboard-guarded-cancel.png)
+
+_Synthetic placeholder Job IDs only; the screenshot did not execute a scheduler command._
 
 ### 2026-09-05 — Open an existing allocation without submitting
 
