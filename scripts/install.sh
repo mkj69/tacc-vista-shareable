@@ -26,7 +26,7 @@ load_config
 require_config_vars \
     LOGIN_ALIAS COMPUTE_ALIAS VISTA_LOGIN_HOST TACC_USERNAME SSH_KEY_PATH \
     SCHEDULER_ACCOUNT REMOTE_PROJECT_DIR ALLOCATION_JOB_NAME TMUX_SESSION_NAME \
-    PARTITIONS PARTITION_LIMITS DEFAULT_PARTITION DEFAULT_HOURS PREFERRED_IDE \
+    PARTITIONS PARTITION_LIMITS PARTITION_NODE_LIMITS DEFAULT_PARTITION DEFAULT_HOURS PREFERRED_IDE \
     LOGIN_NODE_PATTERN
 
 for identifier in "$LOGIN_ALIAS" "$COMPUTE_ALIAS" "$VISTA_LOGIN_HOST" "$TACC_USERNAME" "$ALLOCATION_JOB_NAME"; do
@@ -46,6 +46,14 @@ limit_hours="$(partition_limit_hours "$PARTITION_LIMITS" "$DEFAULT_PARTITION")" 
 }
 if (( $(walltime_seconds "$default_walltime") > 10#$limit_hours * 3600 )); then
     printf '%s\n' 'DEFAULT_HOURS exceeds the configured partition limit.' >&2
+    exit 2
+fi
+default_node_limit="$(partition_limit_nodes "$PARTITION_NODE_LIMITS" "$DEFAULT_PARTITION")" || {
+    printf '%s\n' 'DEFAULT_PARTITION has no valid PARTITION_NODE_LIMITS entry.' >&2
+    exit 2
+}
+if (( 10#$default_node_limit < 1 )); then
+    printf '%s\n' 'The configured default partition must allow at least one node.' >&2
     exit 2
 fi
 case "$PREFERRED_IDE" in cursor|code|none) ;; *) printf '%s\n' 'PREFERRED_IDE must be cursor, code, or none.' >&2; exit 2 ;; esac
@@ -143,6 +151,7 @@ if (( remote_install )); then
         printf 'TMUX_SESSION_NAME=%s\n' "$TMUX_SESSION_NAME"
         printf 'PARTITIONS=%s\n' "$PARTITIONS"
         printf 'PARTITION_LIMITS=%s\n' "$PARTITION_LIMITS"
+        printf 'PARTITION_NODE_LIMITS=%s\n' "$PARTITION_NODE_LIMITS"
         printf 'DEFAULT_PARTITION=%s\n' "$DEFAULT_PARTITION"
         printf 'DEFAULT_HOURS=%s\n' "$DEFAULT_HOURS"
         printf 'LOGIN_NODE_PATTERN=%s\n' "$LOGIN_NODE_PATTERN"
@@ -176,7 +185,7 @@ fi
 trap - EXIT
 cleanup
 printf '%s\n' 'TACC Vista helpers installed successfully.'
-printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [cursor|code|none]'
+printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [nodes] [cursor|code|none]'
 if (( remote_install )); then
     printf '%s\n' 'On a compute node, run: ~/start.sh'
 fi

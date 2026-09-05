@@ -23,6 +23,7 @@ ALLOCATION_JOB_NAME=allocation-test
 TMUX_SESSION_NAME=codex-test
 PARTITIONS=dev,test
 PARTITION_LIMITS=dev:2,test:48
+PARTITION_NODE_LIMITS=dev:8,test:32
 DEFAULT_PARTITION=dev
 DEFAULT_HOURS=2
 PREFERRED_IDE=none
@@ -48,6 +49,10 @@ if HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vis
     printf '%s\n' 'Expected invalid partition validation to fail.' >&2
     exit 1
 fi
+if HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vista-allocate" dev 1 9 none >/dev/null 2>&1; then
+    printf '%s\n' 'Expected excessive node-count validation to fail.' >&2
+    exit 1
+fi
 grep -Fq 'Host login-test' "$test_home/.ssh/tacc-vista/config"
 grep -Fq 'Host compute-test' "$test_home/.ssh/tacc-vista/config"
 grep -Fq 'vista-node-not-ready.invalid' "$test_home/.ssh/tacc-vista/current-node.conf"
@@ -57,4 +62,7 @@ grep -Fq '"$@"' "$repo_dir/scripts/remote/start.sh"
 grep -Fq 'codex resume "$resume_ref"' "$repo_dir/scripts/remote/run-codex.sh"
 grep -Fq 'rm -f "$window_dir/active"' "$repo_dir/scripts/remote/run-codex.sh"
 grep -Fq 'exec "$editor_cli" --classic --new-window --folder-uri "$remote_uri"' "$repo_dir/scripts/local/vista-allocate"
+grep -Fq "submit-node.sh '\$partition' '\$walltime' '\$nodes'" "$repo_dir/scripts/local/vista-allocate"
+grep -Fq -- '--nodes="$nodes"' "$repo_dir/scripts/remote/submit-node.sh"
+grep -Fq -- '--ntasks="$nodes"' "$repo_dir/scripts/remote/submit-node.sh"
 printf '%s\n' 'Smoke test passed.'

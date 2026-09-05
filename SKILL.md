@@ -43,11 +43,11 @@ Store non-secret machine-specific settings in a local configuration outside the 
 
 ## Allocation rules
 
-Vista currently documents `gg` (Grace–Grace CPU), `gh` (Grace–Hopper GPU), and `gh-dev` (Grace–Hopper development) partitions. Its published limits are 48 hours for `gg` and `gh`, and 2 hours for `gh-dev`. Treat these as documented examples, not guaranteed account access or permanent configuration: check the live account limits with `qlimits`, then populate the external `PARTITIONS` and `PARTITION_LIMITS` values accordingly. Accept a short hours form and optionally an `HH:MM:SS` form. A persistent allocation can use a noninteractive Slurm job that sleeps until its wall time expires.
+Vista currently documents `gg` (Grace–Grace CPU), `gh` (Grace–Hopper GPU), and `gh-dev` (Grace–Hopper development) partitions. Its published limits are 48 hours for `gg` and `gh`, and 2 hours for `gh-dev`. Treat these as documented examples, not guaranteed account access or permanent configuration: check the live account limits with `qlimits`, then populate the external `PARTITIONS`, `PARTITION_LIMITS`, and `PARTITION_NODE_LIMITS` values accordingly. Accept a short hours form and optionally an `HH:MM:SS` form. Accept an optional positive node count after the time; default to one node. A persistent allocation can use a noninteractive Slurm job that sleeps until its wall time expires.
 
 The local wrapper should:
 
-1. submit or intentionally reuse one configured allocation job;
+1. submit the explicitly requested allocation or reuse an active allocation only when its partition, wall time, and node count all match;
 2. retain the numeric job ID only in process memory;
 3. wait for that exact job to become running;
 4. resolve its assigned node without writing the node into the skill;
@@ -69,9 +69,11 @@ The IDE SSH target must always be the compute alias after its allocation reaches
 Explain the post-install workflow with command locations made explicit:
 
 1. On the local computer, optionally pre-establish the reusable login master with `ssh -O check LOGIN_ALIAS 2>/dev/null || ssh -MNf LOGIN_ALIAS`. This prompts for fresh authentication only when no usable master exists.
-2. Still on the local computer, run `vista-allocate PARTITION HOURS cursor` (or `code`/`none`). Never tell the user to run this local wrapper from the login-node shell.
+2. Still on the local computer, run `vista-allocate PARTITION HOURS NODES cursor` (or `code`/`none`). Omit `NODES` for a one-node allocation; preserve the legacy `vista-allocate PARTITION HOURS EDITOR` form. Never tell the user to run this local wrapper from the login-node shell.
 3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the compute alias, and opens the configured project directory in an IDE whose SSH target is the compute alias.
 4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
+
+For a multi-node allocation, resolve the Slurm nodelist and point the compute alias at its first hostname. Explain that the IDE opens only on that first node; the other nodes remain part of the same allocation and require an allocation-aware distributed launcher. Do not imply that opening the IDE automatically uses every allocated accelerator.
 
 When launching Cursor, use its classic-window flag together with the remote folder URI. Current Cursor releases can otherwise route a command-line launch into the Agent/Glass landing window even though the Remote-SSH target is valid. This compatibility flag affects the window type; it does not disable Cursor's Agent features inside the IDE.
 

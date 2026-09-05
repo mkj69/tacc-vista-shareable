@@ -4,6 +4,29 @@ A privacy-preserving Codex skill for configuring a TACC Vista workflow that auth
 
 The repository contains placeholders only. It does not include usernames, account identifiers, endpoints, personal paths, node names, job IDs, credentials, or session data.
 
+## News
+
+### 2026-09-05 — Multi-node allocation support
+
+`vista-allocate` now accepts an optional node count between the wall time and IDE arguments:
+
+```bash
+vista-allocate gh 10 4
+vista-allocate gh 10 4 code
+vista-allocate gh 10 4 none
+```
+
+The first command requests four `gh` nodes for ten hours and opens Cursor on the first assigned node. On Vista's current Grace–Hopper layout, four `gh` nodes correspond to four GPUs. The remaining nodes stay in the same Slurm allocation and must be used through an allocation-aware distributed launcher; opening an IDE on the first node does not automatically run work on all four GPUs.
+
+Existing one-node commands remain compatible. A numeric third argument means node count, while `cursor`, `code`, or `none` as the third argument retains the legacy editor selection:
+
+```bash
+vista-allocate gh 10          # one node, preferred IDE
+vista-allocate gh 10 code     # one node, VS Code
+```
+
+Active allocations are now reused only when partition, requested wall time, and node count all match. This prevents a multi-node request from silently attaching to an older single-node allocation. Installations must add `PARTITION_NODE_LIMITS` to their external configuration and rerun `scripts/install.sh` to receive the updated helpers.
+
 ## Why this skill is useful
 
 A normal interactive Vista workflow crosses several separate layers. Without a wrapper, the user may need to remember and repeat the whole sequence every time an allocation or compute node changes:
@@ -27,7 +50,7 @@ Opening another IDE window or remote folder can also start another SSH connectio
 This skill turns those moving pieces into two stable entry points:
 
 ```text
-local computer:  vista-allocate [partition] [hours] [IDE]
+local computer:  vista-allocate [partition] [hours] [nodes] [IDE]
 compute node:    ~/start.sh
 ```
 
@@ -40,7 +63,7 @@ The skill never stores, predicts, submits, or bypasses a password or multifactor
 ```text
 LOCAL COMPUTER
 ┌──────────────────────────────────────────────────────────────┐
-│ vista-allocate [partition] [hours] [cursor|code|none]        │
+│ vista-allocate [partition] [hours] [nodes] [IDE]             │
 │   │                                                          │
 │   ├─ reuse the SSH login master when it is still alive       │
 │   ├─ submit one persistent Slurm allocation                  │
@@ -126,7 +149,7 @@ See `references/configuration-template.md` for the placeholder contract and safe
 The installer does not submit a Slurm job. After installation, the user explicitly starts an allocation with:
 
 ```bash
-vista-allocate [partition] [hours] [cursor|code|none]
+vista-allocate [partition] [hours] [nodes] [cursor|code|none]
 ```
 
 ### How to read the placeholders and command examples
@@ -141,6 +164,7 @@ The names below are documentation stand-ins, not universal TACC commands or valu
 | `<REPOSITORY_URL>` | The clone URL of this public repository. Replace the entire angle-bracket expression, including the brackets. |
 | `[partition]` | A command argument such as `gg`, `gh`, or `gh-dev`, subject to the user's account access. Square brackets in a command synopsis describe an argument; they are not typed. |
 | `[hours]` | Requested Slurm wall time in hours, for example `6`, within the selected partition's limit. |
+| `[nodes]` | Optional positive node count. Omit it for one node. A numeric third argument is interpreted as nodes; configured per-partition limits are enforced. |
 | `[cursor\|code\|none]` | Whether to open Cursor, open VS Code, or only prepare the compute SSH alias. |
 | `WINDOW` | A user-chosen label for one managed Codex window, such as `paper` or `analysis`; it is not an operating-system window ID. |
 
@@ -205,6 +229,7 @@ For example:
 vista-allocate gg 6 cursor
 vista-allocate gh 6 cursor
 vista-allocate gh-dev 2 cursor
+vista-allocate gh 10 4 cursor
 ```
 
 Only use a partition available to the current TACC account. Queue availability and limits can change, and TACC notes that its documentation table may lag behind the live scheduler configuration. Check the current account's real-time limits from the local computer with:
@@ -213,7 +238,7 @@ Only use a partition available to the current TACC account. Queue availability a
 ssh your-login-alias qlimits
 ```
 
-Then make sure the external `PARTITIONS` and `PARTITION_LIMITS` settings match those results. See the [official TACC Vista queue documentation](https://docs.tacc.utexas.edu/hpc/vista/running/) for the current published definitions.
+Then make sure the external `PARTITIONS`, `PARTITION_LIMITS`, and `PARTITION_NODE_LIMITS` settings match those results. See the [official TACC Vista queue documentation](https://docs.tacc.utexas.edu/hpc/vista/running/) for the current published definitions.
 
 The final argument controls the launch:
 
@@ -223,7 +248,7 @@ The final argument controls the launch:
 
 For current Cursor releases, the launcher requests a classic IDE window before opening the Remote-SSH folder. This prevents Cursor from showing its standalone Agent/Glass landing page in place of the file editor. Cursor's Agent tools remain available inside the IDE.
 
-The number following the partition is the requested number of hours. The command performs the remaining work:
+The number following the partition is the requested number of hours. An optional number after it is the requested node count; omitting it requests one node. The command performs the remaining work:
 
 ```text
 submit or reuse the configured Slurm allocation
@@ -237,6 +262,8 @@ submit or reuse the configured Slurm allocation
 If the allocation is pending, leave the local command running; it waits until the node is ready. There is no need to copy the job ID, repeatedly run `squeue`, edit the node hostname, reconnect the IDE manually, or browse to the project directory again.
 
 After a successful launch, the IDE's remote terminal is running on the **compute node**. The login node remains only the authentication, scheduler, and jump layer.
+
+For a multi-node allocation, the stable compute alias points to the first hostname in Slurm's assigned nodelist. The other nodes are reserved by the same allocation, but ordinary commands typed into the IDE terminal run only on the first node. Use the site's supported distributed launcher and the allocation's job ID when intentionally starting work across all allocated nodes.
 
 ### 3. Optionally start or restore Codex on the compute node
 

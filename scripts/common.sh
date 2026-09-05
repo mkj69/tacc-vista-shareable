@@ -27,7 +27,7 @@ load_config() {
         case "$key" in
             LOGIN_ALIAS|COMPUTE_ALIAS|VISTA_LOGIN_HOST|TACC_USERNAME|SSH_KEY_PATH|\
             SCHEDULER_ACCOUNT|REMOTE_PROJECT_DIR|ALLOCATION_JOB_NAME|TMUX_SESSION_NAME|\
-            PARTITIONS|PARTITION_LIMITS|DEFAULT_PARTITION|DEFAULT_HOURS|PREFERRED_IDE|\
+            PARTITIONS|PARTITION_LIMITS|PARTITION_NODE_LIMITS|DEFAULT_PARTITION|DEFAULT_HOURS|PREFERRED_IDE|\
             LOGIN_NODE_PATTERN)
                 printf -v "$key" '%s' "$value"
                 ;;
@@ -87,6 +87,23 @@ partition_limit_hours() {
     return 1
 }
 
+partition_limit_nodes() {
+    local limits="$1" needle="$2" pair name nodes
+    local old_ifs="$IFS"
+    IFS=','
+    for pair in $limits; do
+        name="${pair%%:*}"
+        nodes="${pair#*:}"
+        if [[ "$name" == "$needle" && "$nodes" =~ ^[0-9]+$ ]]; then
+            IFS="$old_ifs"
+            printf '%s\n' "$nodes"
+            return 0
+        fi
+    done
+    IFS="$old_ifs"
+    return 1
+}
+
 normalize_walltime() {
     local input="$1" hours minutes seconds
     if [[ "$input" =~ ^[0-9]+$ ]]; then
@@ -114,4 +131,17 @@ walltime_seconds() {
     local walltime="$1" hours minutes seconds
     IFS=: read -r hours minutes seconds <<<"$walltime"
     printf '%s\n' "$((10#$hours * 3600 + 10#$minutes * 60 + 10#$seconds))"
+}
+
+slurm_time_limit_seconds() {
+    local value="$1" days=0 hours minutes seconds
+    if [[ "$value" == *-* ]]; then
+        days="${value%%-*}"
+        value="${value#*-}"
+    fi
+    if [[ ! "$days" =~ ^[0-9]+$ || ! "$value" =~ ^[0-9]+:[0-9]{2}:[0-9]{2}$ ]]; then
+        return 1
+    fi
+    IFS=: read -r hours minutes seconds <<<"$value"
+    printf '%s\n' "$((10#$days * 86400 + 10#$hours * 3600 + 10#$minutes * 60 + 10#$seconds))"
 }

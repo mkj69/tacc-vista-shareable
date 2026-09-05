@@ -5,11 +5,29 @@ lib_dir="$HOME/.local/lib/tacc-vista"
 # shellcheck source=/dev/null
 source "$lib_dir/common.sh"
 load_config
-require_config_vars LOGIN_ALIAS COMPUTE_ALIAS REMOTE_PROJECT_DIR PARTITIONS PARTITION_LIMITS DEFAULT_PARTITION DEFAULT_HOURS PREFERRED_IDE
+require_config_vars LOGIN_ALIAS COMPUTE_ALIAS REMOTE_PROJECT_DIR PARTITIONS PARTITION_LIMITS PARTITION_NODE_LIMITS DEFAULT_PARTITION DEFAULT_HOURS PREFERRED_IDE
 
 partition="${1:-$DEFAULT_PARTITION}"
 time_input="${2:-$DEFAULT_HOURS}"
-editor="${3:-$PREFERRED_IDE}"
+third_arg="${3:-}"
+fourth_arg="${4:-}"
+nodes=1
+editor="$PREFERRED_IDE"
+
+if [[ "$third_arg" =~ ^[0-9]+$ ]]; then
+    nodes=$((10#$third_arg))
+    editor="${fourth_arg:-$PREFERRED_IDE}"
+    if (( $# > 4 )); then
+        printf '%s\n' 'Too many arguments. Expected partition, time, nodes, and optional editor.' >&2
+        exit 2
+    fi
+else
+    editor="${third_arg:-$PREFERRED_IDE}"
+    if [[ -n "$fourth_arg" || $# -gt 3 ]]; then
+        printf '%s\n' 'Node count must be a positive integer before the editor argument.' >&2
+        exit 2
+    fi
+fi
 
 if [[ ! "$partition" =~ ^[A-Za-z0-9._-]+$ ]] || ! csv_contains "$PARTITIONS" "$partition"; then
     printf 'Partition is not allowed by the external configuration: %s\n' "$partition" >&2
@@ -24,9 +42,17 @@ if (( $(walltime_seconds "$walltime") > 10#$limit_hours * 3600 )); then
     printf 'Requested time exceeds the configured limit for partition %s.\n' "$partition" >&2
     exit 2
 fi
+limit_nodes="$(partition_limit_nodes "$PARTITION_NODE_LIMITS" "$partition")" || {
+    printf 'No configured node limit for partition: %s\n' "$partition" >&2
+    exit 2
+}
+if (( nodes < 1 || nodes > 10#$limit_nodes )); then
+    printf 'Node count for partition %s must be between 1 and %s.\n' "$partition" "$limit_nodes" >&2
+    exit 2
+fi
 case "$editor" in cursor|code|none) ;; *) printf '%s\n' 'Editor must be cursor, code, or none.' >&2; exit 2 ;; esac
 
-remote_command="\$HOME/.local/lib/tacc-vista/submit-node.sh '$partition' '$walltime'"
+remote_command="\$HOME/.local/lib/tacc-vista/submit-node.sh '$partition' '$walltime' '$nodes'"
 if ! job_output="$(ssh -T "$LOGIN_ALIAS" "$remote_command")"; then
     exit 1
 fi
@@ -36,7 +62,7 @@ if [[ -z "$job_id" ]]; then
     exit 1
 fi
 
-printf '%s\n' 'Waiting for the configured allocation to receive a compute node...'
+printf 'Waiting for the %s-node allocation to receive compute nodes...\n' "$nodes"
 "$HOME/.local/bin/vista-node-update.sh" "$job_id"
 
 if [[ "$editor" == none ]]; then

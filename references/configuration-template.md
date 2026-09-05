@@ -17,6 +17,7 @@ Every machine-specific value starts as a placeholder and is filled only in a use
 | `<TMUX_SESSION_NAME>` | Name for the remote Codex tmux session |
 | `<PARTITION_LIST>` | Comma-separated allowed partitions |
 | `<PARTITION_LIMITS>` | Comma-separated `partition:max-hours` mappings |
+| `<PARTITION_NODE_LIMITS>` | Comma-separated `partition:max-nodes-per-job` mappings |
 | `<DEFAULT_PARTITION>` | Partition chosen by the user |
 | `<DEFAULT_HOURS>` | Requested default wall time in hours |
 | `<PREFERRED_IDE>` | `cursor`, `code`, or `none` |
@@ -42,13 +43,13 @@ The generated node include starts with a non-routable placeholder hostname. Afte
 
 ## Local helper roles
 
-- Allocation wrapper: read the external configuration, validate partition/time, call the remote submit helper, retain the job ID in process memory, wait for the exact job, update the node include, and launch the selected IDE.
+- Allocation wrapper: read the external configuration, validate partition/time/node count, call the remote submit helper, retain the job ID in process memory, wait for the exact job, update the node include, and launch the selected IDE.
 - Node updater: distinguish pending/configuring from terminal failure and stop if the job disappears.
 - IDE integration: use the stable compute alias, not a hard-coded node name.
 
 ## Remote helper roles
 
-- Submit helper: read the scheduler account, job label, partition limits, and output location from external configuration; submit one node and one task; return a clean numeric ID even if the site prints a banner.
+- Submit helper: read the scheduler account, job label, partition limits, and output location from external configuration; submit the requested node count with one task per node; return a clean numeric ID even if the site prints a banner. Reuse only an allocation whose partition, wall time, and node count all match.
 - Resolver: accept an exact job ID, return only a running node, and use distinct statuses for “wait” and “job unavailable.”
 - Recovery launcher: reject login nodes, enter `<REMOTE_PROJECT_DIR>`, create one named tmux/screen session per managed Codex window, bind it to an exact Codex session ID, and restore every window whose active marker survived the previous node.
 
