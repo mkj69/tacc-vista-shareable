@@ -14,6 +14,7 @@ The installer now adds `vista-dashboard-open` and a loopback-only Vista dashboar
 - estimated start time, priority factors, wait reasons, resources, paths, and Slurm details;
 - one detail page per job with real SVG line charts—not text charts—for CPU utilization, RSS/MaxRSS, virtual memory, cumulative CPU time, GPU utilization, GPU memory, temperature, power, and clocks;
 - separate node/GPU series for multi-node GPU allocations, so devices named `GPU 0` on different nodes remain distinguishable;
+- per-node CPU utilization, used memory, memory percentage, and load curves, alongside separately labeled Slurm job-level CPU time and MaxRSS;
 - zero lines when a metric is unused or unavailable;
 - Chinese/English switching, persistent expanded details, and five-second polling;
 - a common-command page with copy-only examples for local SSH, allocation, queue inspection, submission, cancellation, monitoring, and Codex recovery.

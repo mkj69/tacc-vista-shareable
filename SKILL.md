@@ -75,12 +75,13 @@ The dashboard must provide:
 - a home page for active jobs plus recent terminal history, with real Slurm estimated-start and priority data when available;
 - a per-job page with real SVG line charts for CPU utilization, RSS/MaxRSS, virtual memory, cumulative CPU time, GPU utilization, GPU memory, temperature, power, and clocks;
 - separate node/GPU series for multi-node GPU jobs, including Vista partitions that expose GPUs by node type without GPU GRES/TRES entries;
+- per-node CPU utilization, used memory, memory percentage, and load curves sampled from each allocated node, with Slurm job-level CPU time and MaxRSS kept separately;
 - zero-valued chart series when a metric or device is absent, rather than replacing charts with text;
 - a bilingual Chinese/English toggle whose choice survives polling, reloads, and local-port changes;
 - persistent open/closed state for job-detail controls across automatic polling;
 - a bilingual common-command page with copy-only buttons and explicit local/login/compute execution locations.
 
-Poll the homepage without launching per-job GPU steps. On a running job detail page, read CPU/memory from `sstat`; derive normalized CPU utilization from the change in cumulative CPU time between browser samples. Query GPU metrics for jobs whose Slurm TRES data indicates a GPU allocation or whose configured GPU partition provides accelerators implicitly. Use one short overlapping `srun` task per allocated node, pass the job partition explicitly, prefix samples with the hostname, and key each series by node plus GPU index. Never run `nvidia-smi` for CPU-only jobs.
+Poll the homepage without launching per-job live sampling steps. On a running detail page, keep job-level CPU time and MaxRSS from `sstat`, and sample `/proc/stat`, `/proc/meminfo`, and `/proc/loadavg` once per allocated node for node-level CPU, memory, and load curves. Derive CPU utilization from adjacent cumulative tick samples in the browser. Query GPU metrics for jobs whose Slurm TRES data indicates a GPU allocation or whose configured GPU partition provides accelerators implicitly. Use short overlapping `srun` tasks, pass the job partition explicitly, prefix samples with the hostname, and key each series by node plus GPU index. Never run `nvidia-smi` for CPU-only jobs.
 
 Treat only pending, running, configuring, completing, suspended, or stopped states as active. Put cancelled, failed, timed-out, out-of-memory, node-failed, preempted, and completed jobs in history. Merge terminal IDs still visible through `squeue` with accounting history so a never-started cancellation moves out of the active table immediately.
 

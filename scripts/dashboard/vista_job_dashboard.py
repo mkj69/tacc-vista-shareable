@@ -381,6 +381,8 @@ def accounting_row_to_job(row: dict[str, str]) -> dict[str, object]:
         "gpu_warn": "Historical GPU telemetry was not retained",
         "cpu": {"total_cpu_seconds": 0, "rss_mb": 0, "max_rss_mb": 0, "vmem_mb": 0, "max_vmem_mb": 0, "steps": []},
         "cpu_warn": "Historical CPU telemetry was not retained",
+        "node_cpu": {"nodes": []},
+        "node_cpu_warn": "Historical per-node telemetry was not retained",
         "slurm_details": row,
         "is_history": True,
     }
@@ -611,6 +613,79 @@ def query_job_gpu(
     return {"metrics": metrics, "processes": procs}, None
 
 
+def query_job_node_resources(
+    jobid: str,
+    partition: str,
+    node_count: object,
+    node_list: str,
+) -> tuple[dict[str, object], str | None]:
+    """Read per-node CPU counters, memory, and load from every allocated node."""
+    if not shutil.which("srun"):
+        return {"nodes": []}, "srun not available"
+
+    nodes = max(1, to_int(str(node_count)))
+    timeout = max(30, min(90, 20 + nodes * 3))
+    step_cmd = [
+        "srun",
+        "--overlap",
+        f"--jobid={jobid}",
+        f"--partition={partition}",
+        f"--ntasks={nodes}",
+        f"--nodes={nodes}",
+        "--ntasks-per-node=1",
+        "--time=00:00:15",
+    ]
+    if node_list and node_list not in {"N/A", "(null)", "None"}:
+        step_cmd.append(f"--nodelist={node_list}")
+
+    resource_query = (
+        "node=$(hostname -s); "
+        "read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat; "
+        "total=$((user+nice+system+idle+iowait+irq+softirq+steal)); "
+        "idle_all=$((idle+iowait)); "
+        "mem_total=0; mem_available=0; "
+        "while read -r key value _; do "
+        "case \"$key\" in MemTotal:) mem_total=$value ;; MemAvailable:) mem_available=$value ;; esac; "
+        "done < /proc/meminfo; "
+        "read -r load1 load5 load15 _ < /proc/loadavg; "
+        "printf '%s|%s|%s|%s|%s|%s|%s|%s\\n' "
+        "\"$node\" \"$total\" \"$idle_all\" \"$mem_total\" \"$mem_available\" "
+        "\"$load1\" \"$load5\" \"$load15\""
+    )
+    try:
+        raw = run_cmd([*step_cmd, "bash", "-lc", resource_query], timeout=timeout)
+    except RuntimeError as error:
+        return {"nodes": [], "error": str(error)}, None
+
+    samples: list[dict[str, object]] = []
+    for line in raw.splitlines():
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) != 8 or not parts[0] or not all(part.replace(".", "", 1).isdigit() for part in parts[1:]):
+            continue
+        total_ticks = to_int(parts[1])
+        idle_ticks = to_int(parts[2])
+        memory_total_mb = to_int(parts[3]) / 1024
+        memory_available_mb = to_int(parts[4]) / 1024
+        memory_used_mb = max(0.0, memory_total_mb - memory_available_mb)
+        samples.append(
+            {
+                "node": parts[0],
+                "cpu_total_ticks": total_ticks,
+                "cpu_idle_ticks": idle_ticks,
+                "memory_total_mb": round(memory_total_mb, 2),
+                "memory_available_mb": round(memory_available_mb, 2),
+                "memory_used_mb": round(memory_used_mb, 2),
+                "memory_used_pct": round(100 * memory_used_mb / memory_total_mb, 1) if memory_total_mb else 0.0,
+                "load1": float(parts[5]),
+                "load5": float(parts[6]),
+                "load15": float(parts[7]),
+            }
+        )
+    samples.sort(key=lambda item: str(item.get("node", "")))
+    warning = None if samples else "No per-node CPU or memory data was returned"
+    return {"nodes": samples}, warning
+
+
 def query_job_cpu(jobid: str) -> tuple[dict[str, object], str | None]:
     """Read cumulative CPU time and live memory statistics for all running steps."""
     if not shutil.which("sstat"):
@@ -755,6 +830,14 @@ def collect_all(
             cpu_data, cpu_warn = query_job_cpu(j["jobid"])
             entry["cpu"] = cpu_data
             entry["cpu_warn"] = cpu_warn
+            node_cpu_data, node_cpu_warn = query_job_node_resources(
+                j["jobid"],
+                partition,
+                detail.get("NumNodes", j.get("num_nodes", 1)),
+                str(j.get("nodes", "")),
+            )
+            entry["node_cpu"] = node_cpu_data
+            entry["node_cpu_warn"] = node_cpu_warn
         else:
             entry["cpu"] = {
                 "total_cpu_seconds": 0,
@@ -765,6 +848,8 @@ def collect_all(
                 "steps": [],
             }
             entry["cpu_warn"] = None
+            entry["node_cpu"] = {"nodes": []}
+            entry["node_cpu_warn"] = None
 
         estimate = estimated_starts.get(j["jobid"], {})
         priority = priority_components.get(j["jobid"], {})
@@ -977,7 +1062,7 @@ const I18N = {
     all_jobs:'全部作业', dashboard_title:'Vista 作业、CPU 与 GPU 仪表盘', auto_refresh:'自动刷新',
     last_update:'最后更新', gpu_charts:'GPU 实时曲线', cpu_charts:'CPU 与内存实时曲线',
     chart_note:'曲线从打开详情页后开始采样；近期样本保存在本机浏览器中。',
-    cpu_chart_note:'CPU 利用率根据 Slurm 累计 CPU 时间在相邻样本间计算，并按已分配 CPU 数归一化。',
+    cpu_chart_note:'每节点 CPU 利用率根据相邻 /proc/stat 样本计算；Slurm 作业级曲线仍显示累计 CPU 时间和 MaxRSS。',
     active_jobs:'活动作业', running:'运行中', pending:'排队中', nodes_requested:'节点请求',
     cpus_requested:'CPU 请求', gpus_allocated:'GPU 分配', finished:'已结束', abnormal:'异常结束',
     job:'任务', elapsed_left:'耗时 / 剩时', scheduling:'调度信息', placement:'分区 / QoS / 节点',
@@ -1005,7 +1090,7 @@ const I18N = {
     all_jobs:'All jobs', dashboard_title:'Vista Jobs, CPU & GPU Dashboard', auto_refresh:'Auto refresh',
     last_update:'Last update', gpu_charts:'Live GPU Charts', cpu_charts:'Live CPU & Memory Charts',
     chart_note:'Sampling begins when this page opens; recent samples persist in this browser.',
-    cpu_chart_note:'CPU utilization is derived from the change in Slurm cumulative CPU time between samples, normalized by allocated CPUs.',
+    cpu_chart_note:'Per-node CPU utilization is derived from adjacent /proc/stat samples; Slurm job-level charts retain cumulative CPU time and MaxRSS.',
     active_jobs:'Active jobs', running:'Running', pending:'Pending', nodes_requested:'Nodes requested',
     cpus_requested:'CPUs requested', gpus_allocated:'GPUs allocated', finished:'finished', abnormal:'Abnormal exits',
     job:'Job', elapsed_left:'Elapsed / Left', scheduling:'Scheduling', placement:'Partition / QoS / Nodes',
@@ -1505,13 +1590,17 @@ async function refresh() {
 const DETAIL_HISTORY_LIMIT = 720;
 const detailHistoryKey = detailJobId ? `vista-gpu-history-v2-${detailJobId}` : '';
 const detailCpuHistoryKey = detailJobId ? `vista-cpu-history-${detailJobId}` : '';
+const detailNodeCpuHistoryKey = detailJobId ? `vista-node-cpu-history-v1-${detailJobId}` : '';
 let detailSeries = {};
 let detailCpuSeries = [];
+let detailNodeCpuSeries = {};
 if (detailHistoryKey) {
   try { detailSeries = JSON.parse(localStorage.getItem(detailHistoryKey) || '{}'); }
   catch (_) { detailSeries = {}; }
   try { detailCpuSeries = JSON.parse(localStorage.getItem(detailCpuHistoryKey) || '[]'); }
   catch (_) { detailCpuSeries = []; }
+  try { detailNodeCpuSeries = JSON.parse(localStorage.getItem(detailNodeCpuHistoryKey) || '{}'); }
+  catch (_) { detailNodeCpuSeries = {}; }
 }
 
 function metricNumber(value) {
@@ -1571,6 +1660,37 @@ function recordDetailSample(job) {
   });
   if (detailCpuSeries.length > DETAIL_HISTORY_LIMIT) detailCpuSeries.splice(0, detailCpuSeries.length - DETAIL_HISTORY_LIMIT);
   try { localStorage.setItem(detailCpuHistoryKey, JSON.stringify(detailCpuSeries)); } catch (_) { /* storage is optional */ }
+
+  const nodeSamples = (job.node_cpu && job.node_cpu.nodes) || [];
+  for (const sample of nodeSamples) {
+    const node = String(sample.node || 'unknown-node');
+    if (!detailNodeCpuSeries[node]) detailNodeCpuSeries[node] = [];
+    const points = detailNodeCpuSeries[node];
+    const prior = points.length ? points[points.length - 1] : null;
+    const totalTicks = metricNumber(sample.cpu_total_ticks);
+    const idleTicks = metricNumber(sample.cpu_idle_ticks);
+    let cpuUtil = 0;
+    if (prior && totalTicks > metricNumber(prior.cpu_total_ticks)) {
+      const totalDelta = totalTicks - metricNumber(prior.cpu_total_ticks);
+      const idleDelta = Math.max(0, idleTicks - metricNumber(prior.cpu_idle_ticks));
+      cpuUtil = 100 * Math.max(0, totalDelta - idleDelta) / totalDelta;
+    }
+    points.push({
+      t: now,
+      cpu_util: Math.max(0, Math.min(100, cpuUtil)),
+      cpu_total_ticks: totalTicks,
+      cpu_idle_ticks: idleTicks,
+      memory_used_mb: metricNumber(sample.memory_used_mb),
+      memory_available_mb: metricNumber(sample.memory_available_mb),
+      memory_total_mb: metricNumber(sample.memory_total_mb),
+      memory_used_pct: metricNumber(sample.memory_used_pct),
+      load1: metricNumber(sample.load1),
+      load5: metricNumber(sample.load5),
+      load15: metricNumber(sample.load15)
+    });
+    if (points.length > DETAIL_HISTORY_LIMIT) points.splice(0, points.length - DETAIL_HISTORY_LIMIT);
+  }
+  try { localStorage.setItem(detailNodeCpuHistoryKey, JSON.stringify(detailNodeCpuSeries)); } catch (_) { /* storage is optional */ }
 }
 
 const chartColors = ['#58a6ff','#3fb950','#d29922','#f778ba','#a371f7','#39c5cf','#ff7b72','#ffa657'];
@@ -1607,15 +1727,19 @@ function lineChart(field, unit, fixedMax = null, suggestedMax = 1, sourceSeries 
 function metricTitle(zh, en) { return language === 'zh' ? zh : en; }
 function renderCpuCharts() {
   const cpuSeries = {all: detailCpuSeries};
+  const nodeSeries = Object.keys(detailNodeCpuSeries).length ? detailNodeCpuSeries : {
+    'N/A': [{cpu_util:0, memory_used_mb:0, memory_used_pct:0, load1:0}]
+  };
   const charts = [
-    [metricTitle('CPU 利用率（占已分配 CPU）','CPU utilization (% of allocation)'), 'cpu_util', '%', 100, 100],
-    [metricTitle('当前常驻内存 RSS','Current resident memory (RSS)'), 'rss_mb', 'MB', null, 1024],
-    [metricTitle('最大常驻内存 MaxRSS','Maximum resident memory (MaxRSS)'), 'max_rss_mb', 'MB', null, 1024],
-    [metricTitle('当前虚拟内存','Current virtual memory'), 'vmem_mb', 'MB', null, 1024],
-    [metricTitle('累计 CPU 时间','Cumulative CPU time'), 'total_cpu_seconds', 's', null, 60]
+    [metricTitle('每节点 CPU 利用率','Per-node CPU utilization'), 'cpu_util', '%', 100, 100, nodeSeries, metricTitle('节点','Node')],
+    [metricTitle('每节点已用内存','Per-node memory used'), 'memory_used_mb', 'MB', null, 1024, nodeSeries, metricTitle('节点','Node')],
+    [metricTitle('每节点内存使用率','Per-node memory utilization'), 'memory_used_pct', '%', 100, 100, nodeSeries, metricTitle('节点','Node')],
+    [metricTitle('每节点 1 分钟 Load','Per-node 1-minute load'), 'load1', '', null, 1, nodeSeries, metricTitle('节点','Node')],
+    [metricTitle('Slurm 作业累计 CPU 时间','Slurm cumulative job CPU time'), 'total_cpu_seconds', 's', null, 60, cpuSeries, metricTitle('作业','Job')],
+    [metricTitle('Slurm 作业 MaxRSS','Slurm job MaxRSS'), 'max_rss_mb', 'MB', null, 1024, cpuSeries, metricTitle('作业','Job')]
   ];
-  document.getElementById('cpu-charts').innerHTML = charts.map(([title, field, unit, fixedMax, suggestedMax]) =>
-    `<section class="chart"><h3>${esc(title)}</h3>${lineChart(field, unit, fixedMax, suggestedMax, cpuSeries, 'CPU')}</section>`
+  document.getElementById('cpu-charts').innerHTML = charts.map(([title, field, unit, fixedMax, suggestedMax, source, prefix]) =>
+    `<section class="chart"><h3>${esc(title)}</h3>${lineChart(field, unit, fixedMax, suggestedMax, source, prefix)}</section>`
   ).join('');
 }
 
@@ -1645,6 +1769,14 @@ function currentCpuBlock(job) {
     <div class="stat"><div class="stat-value" style="font-size:16px">${shown(cpu.max_rss_mb, '0')} MB</div><div class="small">MaxRSS</div></div>
     <div class="stat"><div class="stat-value" style="font-size:16px">${shown(steps, '0')}</div><div class="small">Slurm steps</div></div>
   </div>`;
+}
+
+function currentNodeCpuBlock(job) {
+  const samples = (job.node_cpu && job.node_cpu.nodes) || [];
+  const warning = (job.node_cpu && job.node_cpu.error) || job.node_cpu_warn;
+  if (!samples.length) return `<div class="small">${warning ? `⚠ ${shown(warning)}` : esc(metricTitle('尚无每节点 CPU/内存数据。','No per-node CPU or memory data yet.'))}</div>`;
+  const rows = samples.map(sample => `<tr><td>${shown(sample.node)}</td><td>${shown(sample.memory_used_mb)} / ${shown(sample.memory_total_mb)} MB</td><td>${shown(sample.memory_used_pct)}%</td><td>${shown(sample.load1)}</td><td>${shown(sample.load5)}</td><td>${shown(sample.load15)}</td></tr>`).join('');
+  return `${warning ? `<div class="small">⚠ ${shown(warning)}</div>` : ''}<div class="history-wrap"><table><thead><tr><th>Node</th><th>${esc(metricTitle('已用 / 总内存','Used / total memory'))}</th><th>${esc(metricTitle('内存使用率','Memory utilization'))}</th><th>Load 1m</th><th>Load 5m</th><th>Load 15m</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function currentGpuBlock(job) {
@@ -1687,7 +1819,8 @@ function renderJobDetail(job) {
         ['WorkDir', job.work_dir], ['Command', job.command], ['StdOut', job.stdout], ['StdErr', job.stderr], ['StdIn', job.stdin]
       ])}</section>
     </div>
-    <h2 style="margin-top:16px">${esc(metricTitle('CPU 与内存实况','Live CPU & memory'))}</h2>${currentCpuBlock(job)}
+    <h2 style="margin-top:16px">${esc(metricTitle('每节点 CPU 与内存实况','Live CPU & memory by node'))}</h2>${currentNodeCpuBlock(job)}
+    <h2 style="margin-top:16px">${esc(metricTitle('Slurm 作业级 CPU 与内存','Slurm job-level CPU & memory'))}</h2>${currentCpuBlock(job)}
     <h2 style="margin-top:16px">${esc(t('gpu_live'))}</h2>${currentGpuBlock(job)}
     ${fullSlurmDetails(job, 'detail')}`;
   restoreDetailState(document.getElementById('job-overview'));
