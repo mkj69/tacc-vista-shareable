@@ -60,6 +60,8 @@ Shorter wall times may improve backfill but never guarantee an immediate start. 
 
 Use a stable login alias and a stable compute alias. The compute alias obtains its current hostname from a locally generated include and connects through the login alias with `ProxyJump`. Use OpenSSH multiplexing for the login connection when the site's policy permits it.
 
+The IDE SSH target must always be the compute alias after its allocation reaches `RUNNING`. Never open the remote project on the login alias; the login node is used only for authentication, scheduler commands, and the `ProxyJump` transport to the assigned compute node.
+
 `ControlPersist yes` has no configured expiry, but the master can still end after a reboot, process termination, socket removal, network or server disconnect, site policy action, or explicit closure. Losing the SSH master must not be described as cancelling a Slurm allocation; the two lifetimes are independent.
 
 ## Remote recovery

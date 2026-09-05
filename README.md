@@ -1,6 +1,6 @@
 # TACC Vista Shareable Skill
 
-A privacy-preserving Codex skill for configuring a TACC Vista workflow that connects through a login host, requests a Slurm allocation, updates a stable compute-node SSH alias, opens Cursor or VS Code, and resumes Codex inside tmux or GNU screen.
+A privacy-preserving Codex skill for configuring a TACC Vista workflow that authenticates through a login host, requests a Slurm allocation, updates a stable compute-node SSH alias, connects Cursor or VS Code to the assigned compute node, and resumes Codex inside tmux or GNU screen.
 
 The repository contains placeholders only. It does not include usernames, account identifiers, endpoints, personal paths, node names, job IDs, credentials, or session data.
 
@@ -16,7 +16,7 @@ open a terminal
   -> repeatedly inspect the Slurm queue
   -> discover the assigned compute-node hostname
   -> update or reconstruct the SSH jump command
-  -> connect the IDE through the login node
+  -> connect the IDE to that compute node, using the login node only as a jump host
   -> possibly authenticate again for a new SSH connection
   -> reopen the correct remote project directory
   -> recreate terminal sessions and find the right Codex conversations
@@ -31,7 +31,7 @@ local computer:  vista-allocate [partition] [hours] [IDE]
 compute node:    ~/start.sh
 ```
 
-The local side keeps stable login and compute aliases, reuses a live authenticated login connection with OpenSSH `ControlMaster`/`ControlPersist`, requests and tracks one exact Slurm allocation, updates the private node mapping, and opens the chosen IDE at the configured directory. The remote side reconstructs the active managed Codex windows from shared state.
+The local side keeps stable login and compute aliases, reuses a live authenticated login connection with OpenSSH `ControlMaster`/`ControlPersist`, requests and tracks one exact Slurm allocation, updates the private node mapping, and opens the chosen IDE on that compute node at the configured directory. The login node is only the authentication, scheduler, and SSH jump layer; the IDE workspace and Codex processes run on the allocated compute node. The remote side reconstructs the active managed Codex windows from shared state.
 
 The skill never stores, predicts, submits, or bypasses a password or multifactor token. The user enters the token directly into SSH when fresh authentication is required. Reuse lasts only while the SSH master remains alive and the site permits it; a reboot, network/server disconnect, explicit master shutdown, or site policy can require a new token.
 
