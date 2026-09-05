@@ -19,6 +19,14 @@ The installer now adds `vista-dashboard-open` and a loopback-only Vista dashboar
 
 Charts begin sampling when a job detail page opens. Recent samples stay in that browser, so telemetry that was never sampled cannot be reconstructed later. The dashboard runs on the login node because its GPU inspection path launches a short overlapping step inside an existing running allocation; the IDE still connects to the compute node. The server binds only to remote loopback and is reached through the reusable SSH login connection.
 
+#### Dashboard preview
+
+The screenshots below use synthetic placeholder data. They show the real dashboard layout and available fields without publishing a username, allocation, job, node, path, or telemetry from an actual Vista account.
+
+![Vista dashboard overview with active, pending, and recently finished jobs](assets/screenshots/dashboard-overview.png)
+
+![Vista job detail page with CPU, memory, and GPU line charts](assets/screenshots/dashboard-job-detail.png)
+
 ### 2026-09-05 — Multi-node allocation support
 
 `vista-allocate` now accepts an optional node count between the wall time and IDE arguments:
