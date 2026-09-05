@@ -92,8 +92,9 @@ remote_path="$REMOTE_PROJECT_DIR"
 if command -v python3 >/dev/null 2>&1; then
     remote_path="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$REMOTE_PROJECT_DIR")"
 fi
-remote_uri="vscode-remote://ssh-remote+${COMPUTE_ALIAS}${remote_path}"
-printf 'Opening %s at the configured remote project directory...\n' "$editor_name"
+allocation_alias="${COMPUTE_ALIAS}-${job_id}"
+remote_uri="vscode-remote://ssh-remote+${allocation_alias}${remote_path}"
+printf 'Opening one %s window for the requested allocation...\n' "$editor_name"
 if [[ "$editor" == cursor ]]; then
     # Cursor 3.x may otherwise route a remote-folder launch into its
     # Agent/Glass landing window instead of a conventional IDE window.

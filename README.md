@@ -18,6 +18,8 @@ vista-allocate gh 10 4 none
 
 The first command requests four `gh` nodes for ten hours and opens Cursor on the first assigned node. On Vista's current Grace–Hopper layout, four `gh` nodes correspond to four GPUs. The remaining nodes stay in the same Slurm allocation and must be used through an allocation-aware distributed launcher; opening an IDE on the first node does not automatically run work on all four GPUs.
 
+Each `vista-allocate` invocation opens exactly one IDE window for its allocation. The wrapper creates a private allocation-specific SSH alias, so a `gh` window and a later `gg` window remain connected to their own jobs instead of both following whichever node the shared base alias most recently selected.
+
 Existing one-node commands remain compatible. A numeric third argument means node count, while `cursor`, `code`, or `none` as the third argument retains the legacy editor selection:
 
 ```bash
@@ -68,8 +70,8 @@ LOCAL COMPUTER
 │   ├─ reuse the SSH login master when it is still alive       │
 │   ├─ submit one persistent Slurm allocation                  │
 │   ├─ wait for that exact job to reach RUNNING                │
-│   ├─ write its node into a private dynamic SSH include       │
-│   └─ open Cursor / VS Code through the stable compute alias  │
+│   ├─ create a private allocation-specific SSH alias          │
+│   └─ open one IDE window through that allocation alias       │
 └───────────────────────────┬──────────────────────────────────┘
                             │ ProxyJump through login alias
                             ▼
@@ -263,7 +265,7 @@ If the allocation is pending, leave the local command running; it waits until th
 
 After a successful launch, the IDE's remote terminal is running on the **compute node**. The login node remains only the authentication, scheduler, and jump layer.
 
-For a multi-node allocation, the stable compute alias points to the first hostname in Slurm's assigned nodelist. The other nodes are reserved by the same allocation, but ordinary commands typed into the IDE terminal run only on the first node. Use the site's supported distributed launcher and the allocation's job ID when intentionally starting work across all allocated nodes.
+For each allocation, the wrapper creates an allocation-specific alias and points it to the first hostname in Slurm's assigned nodelist. It opens one IDE window through that alias. The other nodes are reserved by the same allocation, but ordinary commands typed into the IDE terminal run only on the first node. Use the site's supported distributed launcher and the allocation's job ID when intentionally starting work across all allocated nodes. Allocation-specific aliases remain separate, so opening another allocation does not redirect an earlier `gh` or `gg` window.
 
 ### 3. Optionally start or restore Codex on the compute node
 

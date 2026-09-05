@@ -44,8 +44,8 @@ The generated node include starts with a non-routable placeholder hostname. Afte
 ## Local helper roles
 
 - Allocation wrapper: read the external configuration, validate partition/time/node count, call the remote submit helper, retain the job ID in process memory, wait for the exact job, update the node include, and launch the selected IDE.
-- Node updater: distinguish pending/configuring from terminal failure and stop if the job disappears.
-- IDE integration: use the stable compute alias, not a hard-coded node name.
+- Node updater: distinguish pending/configuring from terminal failure, stop if the job disappears, and write both the latest base alias and a persistent allocation-specific alias into private local SSH state.
+- IDE integration: open exactly one window through the allocation-specific alias, not a hard-coded node name. Preserve aliases for other active allocations so their windows do not get redirected.
 
 ## Remote helper roles
 
