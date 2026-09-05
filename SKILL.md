@@ -9,10 +9,16 @@ Build this standalone workflow on a user's machine:
 
 ```text
 local login authentication -> remote Slurm allocation -> dynamic compute SSH alias -> IDE
-compute-node shell -> tmux -> Codex resume
+compute-node shell -> named tmux/screen windows -> exact Codex sessions
 ```
 
 Start from the placeholders in [references/configuration-template.md](references/configuration-template.md). Copy [assets/tacc-vista.env.example](assets/tacc-vista.env.example) outside the skill before replacing placeholders. Use [assets/ssh-config.example](assets/ssh-config.example) only as a merge template; never overwrite an existing SSH config wholesale.
+
+## Executable setup
+
+For a first-time installation, help the user fill the external configuration, then run `scripts/install.sh`. The installer creates the local SSH fragment and helper commands, installs the remote allocation/recovery helpers through the configured login alias, and leaves existing unrelated SSH settings intact. Run `scripts/doctor.sh --remote` afterward. Use `tests/smoke.sh` to validate the package itself without contacting Vista.
+
+Do not run the installer until every placeholder has been replaced and the user has authorized changes to local and remote configuration. The installer never submits a Slurm allocation; that remains a separate explicit action.
 
 ## Privacy boundary
 
@@ -58,7 +64,13 @@ Use a stable login alias and a stable compute alias. The compute alias obtains i
 
 ## Remote recovery
 
-The remote recovery command must refuse login nodes, enter the configured shared project directory, create or attach a tmux session, and use `codex resume --last` only when saved sessions exist. A new compute node requires a new tmux server. Shared files remain available; running applications resume only through their own checkpoint mechanisms.
+The remote recovery command must refuse login nodes and enter the configured shared project directory. Treat each managed Codex window as a separate named tmux session, or a separate GNU screen session when tmux is unavailable. Persist only a restricted active marker and exact Codex session ID for each window outside the skill directory.
+
+On every `~/start.sh` invocation, recreate all active managed windows that are missing on the current node, then attach the requested window or the first active one. Allow new windows without replacing restored windows. A normal Codex exit or explicit `~/start.sh --close WINDOW` must clear that window's active marker; an SSH disconnect, IDE disconnect, abnormal process exit, or compute-node loss must leave it marked for recovery. Never infer that an unmanaged Codex process was intentionally closed.
+
+Do not use `codex resume --last` for a multi-window workflow. Bind each managed window to its exact session ID. If no binding exists yet, show the all-session picker once and record the selected session from the running Codex process without reading conversation content. Existing unmanaged Codex processes require a one-time, explicit migration into named managed windows. Do not resume the same session concurrently on two compute nodes.
+
+A new compute node requires a new tmux/screen server. Shared files and Codex session records remain available; running applications resume only through their own checkpoint mechanisms.
 
 ## Verification
 

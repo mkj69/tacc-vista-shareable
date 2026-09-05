@@ -1,0 +1,71 @@
+#!/bin/bash
+set -euo pipefail
+
+lib_dir="$HOME/.local/lib/tacc-vista"
+# shellcheck source=/dev/null
+source "$lib_dir/common.sh"
+load_config
+require_config_vars LOGIN_ALIAS COMPUTE_ALIAS REMOTE_PROJECT_DIR PARTITIONS PARTITION_LIMITS DEFAULT_PARTITION DEFAULT_HOURS PREFERRED_IDE
+
+partition="${1:-$DEFAULT_PARTITION}"
+time_input="${2:-$DEFAULT_HOURS}"
+editor="${3:-$PREFERRED_IDE}"
+
+if [[ ! "$partition" =~ ^[A-Za-z0-9._-]+$ ]] || ! csv_contains "$PARTITIONS" "$partition"; then
+    printf 'Partition is not allowed by the external configuration: %s\n' "$partition" >&2
+    exit 2
+fi
+walltime="$(normalize_walltime "$time_input")"
+limit_hours="$(partition_limit_hours "$PARTITION_LIMITS" "$partition")" || {
+    printf 'No configured time limit for partition: %s\n' "$partition" >&2
+    exit 2
+}
+if (( $(walltime_seconds "$walltime") > 10#$limit_hours * 3600 )); then
+    printf 'Requested time exceeds the configured limit for partition %s.\n' "$partition" >&2
+    exit 2
+fi
+case "$editor" in cursor|code|none) ;; *) printf '%s\n' 'Editor must be cursor, code, or none.' >&2; exit 2 ;; esac
+
+remote_command="\$HOME/.local/lib/tacc-vista/submit-node.sh '$partition' '$walltime'"
+if ! job_output="$(ssh -T "$LOGIN_ALIAS" "$remote_command")"; then
+    exit 1
+fi
+job_id="$(awk '/^[0-9]+$/ { print; exit }' <<<"$job_output")"
+if [[ -z "$job_id" ]]; then
+    printf '%s\n' 'The allocation job ID could not be read.' >&2
+    exit 1
+fi
+
+printf '%s\n' 'Waiting for the configured allocation to receive a compute node...'
+"$HOME/.local/bin/vista-node-update.sh" "$job_id"
+
+if [[ "$editor" == none ]]; then
+    printf '%s\n' 'The compute SSH alias is ready.'
+    exit 0
+fi
+
+if [[ "$editor" == cursor ]]; then
+    editor_cli="$(command -v cursor || true)"
+    if [[ -z "$editor_cli" && -x '/Applications/Cursor.app/Contents/Resources/app/bin/cursor' ]]; then
+        editor_cli='/Applications/Cursor.app/Contents/Resources/app/bin/cursor'
+    fi
+    editor_name='Cursor'
+else
+    editor_cli="$(command -v code || true)"
+    if [[ -z "$editor_cli" && -x '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' ]]; then
+        editor_cli='/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+    fi
+    editor_name='VS Code'
+fi
+if [[ -z "$editor_cli" ]]; then
+    printf '%s command was not found; the compute alias is ready for manual connection.\n' "$editor_name" >&2
+    exit 1
+fi
+
+remote_path="$REMOTE_PROJECT_DIR"
+if command -v python3 >/dev/null 2>&1; then
+    remote_path="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$REMOTE_PROJECT_DIR")"
+fi
+remote_uri="vscode-remote://ssh-remote+${COMPUTE_ALIAS}${remote_path}"
+printf 'Opening %s at the configured remote project directory...\n' "$editor_name"
+exec "$editor_cli" --new-window --folder-uri "$remote_uri"

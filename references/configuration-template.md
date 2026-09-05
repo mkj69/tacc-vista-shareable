@@ -4,7 +4,7 @@ Every machine-specific value starts as a placeholder and is filled only in a use
 
 ## Placeholder map
 
-| Placeholder | Value supplied by the installer |
+| Placeholder | Meaning |
 |---|---|
 | `<LOGIN_ALIAS>` | Stable local SSH alias for the Vista login host |
 | `<COMPUTE_ALIAS>` | Stable local SSH alias for the allocated compute node |
@@ -15,19 +15,24 @@ Every machine-specific value starts as a placeholder and is filled only in a use
 | `<REMOTE_PROJECT_DIR>` | Shared remote directory to open in the IDE |
 | `<ALLOCATION_JOB_NAME>` | Label used to recognize the persistent allocation job |
 | `<TMUX_SESSION_NAME>` | Name for the remote Codex tmux session |
+| `<PARTITION_LIST>` | Comma-separated allowed partitions |
+| `<PARTITION_LIMITS>` | Comma-separated `partition:max-hours` mappings |
 | `<DEFAULT_PARTITION>` | Partition chosen by the user |
 | `<DEFAULT_HOURS>` | Requested default wall time in hours |
 | `<PREFERRED_IDE>` | `cursor`, `code`, or `none` |
-| `<LOCAL_NODE_INCLUDE>` | User-restricted file containing the current compute hostname |
-| `<LOCAL_CONTROL_PATH>` | User-restricted OpenSSH control-socket pattern |
+| `<LOGIN_NODE_PATTERN>` | Shell glob matching the site's login-node hostnames |
+| `<LOCAL_NODE_INCLUDE>` | Installer-generated, user-restricted file containing the current compute hostname |
+| `<LOCAL_CONTROL_PATH>` | Installer-generated, user-restricted OpenSSH control-socket pattern |
 
 Do not substitute a guessed value. Ask for a missing non-secret value or derive it from existing local configuration with the user's permission. Never ask for a password, token code, private-key body, or saved session files.
 
 ## Configuration file
 
-Copy `assets/tacc-vista.env.example` to a user-restricted configuration location outside the cloned skill/repository. Replace every angle-bracket placeholder there. Set file permissions so only the user can read and write it. Do not commit the populated file.
+Copy `assets/tacc-vista.env.example` to `${XDG_CONFIG_HOME:-$HOME/.config}/tacc-vista/config` outside the cloned skill/repository. Replace every angle-bracket placeholder there. Set file permissions so only the user can read and write it. Do not commit the populated file.
 
 The example intentionally contains no defaults that could be mistaken for another person's account. Partition names and limits must be checked against the current Vista scheduler and account rather than copied from someone else's setup.
+
+After filling the configuration, run `scripts/install.sh`. It installs the local helpers, generates the SSH fragment, connects through the configured login alias, and installs the remote helpers. Run `scripts/doctor.sh --remote` afterward for a read-only verification. Use `scripts/install.sh --local-only` only when intentionally deferring remote setup.
 
 ## SSH configuration
 
@@ -45,7 +50,18 @@ The generated node include starts with a non-routable placeholder hostname. Afte
 
 - Submit helper: read the scheduler account, job label, partition limits, and output location from external configuration; submit one node and one task; return a clean numeric ID even if the site prints a banner.
 - Resolver: accept an exact job ID, return only a running node, and use distinct statuses for “wait” and “job unavailable.”
-- Recovery launcher: reject login nodes, enter `<REMOTE_PROJECT_DIR>`, create or attach `<TMUX_SESSION_NAME>`, and run `codex resume --last` only when saved sessions exist.
+- Recovery launcher: reject login nodes, enter `<REMOTE_PROJECT_DIR>`, create one named tmux/screen session per managed Codex window, bind it to an exact Codex session ID, and restore every window whose active marker survived the previous node.
+
+## Managed Codex window lifecycle
+
+- `~/start.sh --new WINDOW` creates a new managed window without replacing restored ones.
+- `~/start.sh WINDOW` attaches that window. On first migration it shows the all-session picker, then records the selected session ID.
+- `~/start.sh` recreates all active managed windows missing on the current node and attaches one.
+- `~/start.sh --list` reports whether each saved window is closed, marked active, or running locally.
+- A normal Codex exit or `~/start.sh --close WINDOW` removes the active marker, so the next node does not restore it.
+- Disconnecting SSH or the IDE, or losing the compute node, leaves active markers intact.
+
+This lifecycle applies only after a Codex window has been launched or migrated through the helper. To migrate an existing unmanaged window, exit that Codex process, run `~/start.sh WINDOW`, and select its saved session. Never run the same session concurrently on old and new nodes.
 
 ## Safe setup sequence
 
