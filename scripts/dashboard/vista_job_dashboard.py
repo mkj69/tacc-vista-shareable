@@ -75,6 +75,19 @@ def parse_gpu_line(line: str) -> dict[str, str]:
     }
 
 
+def parse_node_gpu_line(line: str) -> dict[str, str]:
+    """Parse a hostname-prefixed nvidia-smi CSV row from a multi-node step."""
+    node, separator, payload = line.partition("|")
+    if not separator or not node.strip():
+        return {}
+    parsed = parse_gpu_line(payload)
+    if not parsed:
+        return {}
+    parsed["node"] = node.strip()
+    parsed["series_id"] = f"{node.strip()} / GPU {parsed['index']}"
+    return parsed
+
+
 def to_int(v: str) -> int:
     v = v.strip()
     if v in {"", "N/A", "[Not Supported]"}:
@@ -522,27 +535,45 @@ def merge_history_jobs(
     )[:limit]
 
 
-def query_job_gpu(jobid: str) -> tuple[dict, str | None]:
+def query_job_gpu(
+    jobid: str,
+    partition: str,
+    node_count: object,
+    node_list: str,
+) -> tuple[dict, str | None]:
     """
     Query GPU status for a running job via an inline one-off srun step.
     """
     if not shutil.which("srun"):
         return {"error": "srun not available"}, None
 
-    # Query GPU summary
-    srun_cmd = [
+    nodes = max(1, to_int(str(node_count)))
+    timeout = max(30, min(90, 20 + nodes * 3))
+    step_cmd = [
         "srun",
         "--overlap",
         f"--jobid={jobid}",
-        "--ntasks=1",
-        "--nodes=1",
-        "--time=00:00:10",
-        "nvidia-smi",
-        "--query-gpu=index,utilization.gpu,utilization.memory,memory.used,memory.total,temperature.gpu,power.draw,clocks.current.sm,clocks.current.memory,pcie.link.gen.current,pcie.link.width.current,name",
-        "--format=csv,noheader,nounits",
+        f"--partition={partition}",
+        f"--ntasks={nodes}",
+        f"--nodes={nodes}",
+        "--ntasks-per-node=1",
+        "--time=00:00:15",
     ]
+    if node_list and node_list not in {"N/A", "(null)", "None"}:
+        step_cmd.append(f"--nodelist={node_list}")
+
+    gpu_query = (
+        "node=$(hostname -s); "
+        "nvidia-smi "
+        "--query-gpu=index,utilization.gpu,utilization.memory,memory.used,memory.total,"
+        "temperature.gpu,power.draw,clocks.current.sm,clocks.current.memory,"
+        "pcie.link.gen.current,pcie.link.width.current,name "
+        "--format=csv,noheader,nounits | "
+        "while IFS= read -r line; do printf '%s|%s\\n' \"$node\" \"$line\"; done"
+    )
+    srun_cmd = [*step_cmd, "bash", "-lc", gpu_query]
     try:
-        gpu_raw = run_cmd(srun_cmd, timeout=20)
+        gpu_raw = run_cmd(srun_cmd, timeout=timeout)
     except RuntimeError as e:
         return {"error": str(e), "metrics": []}, None
 
@@ -551,32 +582,31 @@ def query_job_gpu(jobid: str) -> tuple[dict, str | None]:
 
     metrics = []
     for line in gpu_raw.splitlines():
-        parsed = parse_gpu_line(line)
+        parsed = parse_node_gpu_line(line)
         if parsed:
             metrics.append(parsed)
+    metrics.sort(key=lambda item: (item.get("node", ""), to_int(item.get("index", "0"))))
 
-    # Query processes on device (single call)
-    proc_cmd = [
-        "srun",
-        "--overlap",
-        f"--jobid={jobid}",
-        "--ntasks=1",
-        "--nodes=1",
-        "--time=00:00:10",
-        "nvidia-smi",
-        "--query-compute-apps=pid,process_name,used_memory",
-        "--format=csv,noheader,nounits",
-    ]
+    proc_query = (
+        "node=$(hostname -s); "
+        "nvidia-smi --query-compute-apps=pid,process_name,used_memory "
+        "--format=csv,noheader,nounits | "
+        "while IFS= read -r line; do printf '%s|%s\\n' \"$node\" \"$line\"; done"
+    )
+    proc_cmd = [*step_cmd, "bash", "-lc", proc_query]
     try:
-        proc_raw = run_cmd(proc_cmd, timeout=20)
+        proc_raw = run_cmd(proc_cmd, timeout=timeout)
     except RuntimeError as e:
         return {"error": str(e), "metrics": metrics, "processes": []}, None
 
     procs = []
     for line in (proc_raw or "").splitlines():
-        cols = [x.strip() for x in line.split(",")]
+        node, separator, payload = line.partition("|")
+        if not separator:
+            continue
+        cols = [x.strip() for x in payload.split(",")]
         if len(cols) >= 3 and cols[0].isdigit():
-            procs.append({"pid": cols[0], "name": cols[1], "mem": cols[2]})
+            procs.append({"node": node.strip(), "pid": cols[0], "name": cols[1], "mem": cols[2]})
 
     return {"metrics": metrics, "processes": procs}, None
 
@@ -696,12 +726,19 @@ def collect_all(
                 j.get("gres", ""),
             )
         )
-        has_gpu_allocation = bool(
+        partition = str(j.get("partition") or detail.get("Partition") or "").rstrip("*").lower()
+        features = str(detail.get("Features", ""))
+        has_gpu_allocation = partition in {"gh", "gh-dev"} or bool(
             re.search(r"(?:gres/)?gpu(?::[^=,\s]+)?=\d+", tres_text, re.IGNORECASE)
-        )
+        ) or bool(re.search(r"(?:^|,)gh(?:400)?(?:,|$)", features, re.IGNORECASE))
         is_running = j["state"] in {"RUNNING", "R", "RUNNING+"}
         if include_gpu and is_running and has_gpu_allocation:
-            data, warn = query_job_gpu(j["jobid"])
+            data, warn = query_job_gpu(
+                j["jobid"],
+                partition,
+                detail.get("NumNodes", j.get("num_nodes", 1)),
+                str(j.get("nodes", "")),
+            )
             entry = {
                 "gpu": data,
                 "gpu_warn": warn,
@@ -1415,7 +1452,12 @@ function renderSummary(jobs, history) {
   const pending = jobs.filter(j => String(j.state).startsWith('PEND') || j.state === 'PD').length;
   const cpus = jobs.reduce((sum, j) => sum + safeNumber(j.num_cpus), 0);
   const nodes = jobs.reduce((sum, j) => sum + safeNumber(j.num_nodes), 0);
-  const gpus = jobs.reduce((sum, j) => sum + tresCount(j.alloc_tres !== 'N/A' ? j.alloc_tres : j.req_tres, 'gpu'), 0);
+  const gpus = jobs.reduce((sum, j) => {
+    const explicit = tresCount(j.alloc_tres !== 'N/A' ? j.alloc_tres : j.req_tres, 'gpu');
+    const partition = String(j.partition || '').replace(/\*$/, '').toLowerCase();
+    const implicit = ['gh', 'gh-dev'].includes(partition) ? safeNumber(j.num_nodes) : 0;
+    return sum + Math.max(explicit, implicit);
+  }, 0);
   const failed = history.filter(j => !String(j.state).startsWith('COMPLETED')).length;
   const stats = [
     [t('active_jobs'), jobs.length], [t('running'), running], [t('pending'), pending],
@@ -1461,7 +1503,7 @@ async function refresh() {
 }
 
 const DETAIL_HISTORY_LIMIT = 720;
-const detailHistoryKey = detailJobId ? `vista-gpu-history-${detailJobId}` : '';
+const detailHistoryKey = detailJobId ? `vista-gpu-history-v2-${detailJobId}` : '';
 const detailCpuHistoryKey = detailJobId ? `vista-cpu-history-${detailJobId}` : '';
 let detailSeries = {};
 let detailCpuSeries = [];
@@ -1479,11 +1521,15 @@ function metricNumber(value) {
 
 function recordDetailSample(job) {
   const metrics = (job.gpu && job.gpu.metrics) || [];
-  const byIndex = Object.fromEntries(metrics.map(metric => [String(metric.index), metric]));
-  const requestedGpuCount = tresCount(job.alloc_tres !== 'N/A' ? job.alloc_tres : job.req_tres, 'gpu');
+  const seriesKey = metric => metric.series_id || (metric.node ? `${metric.node} / GPU ${metric.index}` : `GPU ${metric.index}`);
+  const byIndex = Object.fromEntries(metrics.map(metric => [seriesKey(metric), metric]));
+  const explicitGpuCount = tresCount(job.alloc_tres !== 'N/A' ? job.alloc_tres : job.req_tres, 'gpu');
+  const partition = String(job.partition || '').replace(/\*$/, '').toLowerCase();
+  const implicitGpuCount = ['gh', 'gh-dev'].includes(partition) ? safeNumber(job.num_nodes) : 0;
+  const requestedGpuCount = Math.max(explicitGpuCount, implicitGpuCount);
   const knownIndexes = new Set([...Object.keys(detailSeries), ...Object.keys(byIndex)]);
   if (!knownIndexes.size) {
-    for (let index = 0; index < Math.max(1, requestedGpuCount); index += 1) knownIndexes.add(String(index));
+    for (let index = 0; index < Math.max(1, requestedGpuCount); index += 1) knownIndexes.add(`GPU ${index}`);
   }
   const now = Date.now();
   for (const index of knownIndexes) {
@@ -1552,7 +1598,7 @@ function lineChart(field, unit, fixedMax = null, suggestedMax = 1, sourceSeries 
   }).join('');
   const legend = seriesEntries.map(([index, points], seriesIndex) => {
     const current = points.length ? metricNumber(points[points.length - 1][field]) : 0;
-    const seriesName = index === 'all' ? labelPrefix : `${labelPrefix} ${shown(index)}`;
+    const seriesName = index === 'all' ? labelPrefix : (String(index).includes('GPU') ? String(index) : `${labelPrefix} ${index}`);
     return `<span class="legend-item"><span class="legend-dot" style="background:${chartColors[seriesIndex % chartColors.length]}"></span>${esc(seriesName)} · ${esc(t('current_value'))}: ${current.toFixed(1)} ${esc(unit)}</span>`;
   }).join('');
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img">${grid}<line x1="${left}" y1="${top}" x2="${left}" y2="${top+plotHeight}" stroke="#6e7681"/><line x1="${left}" y1="${top+plotHeight}" x2="${width-right}" y2="${top+plotHeight}" stroke="#6e7681"/>${paths}<text x="${width-right}" y="${height-6}" text-anchor="end" fill="#9aa4b2" font-size="10">${sampleCount} ${esc(t('samples'))}</text></svg><div class="legend">${legend}</div>`;
@@ -1607,8 +1653,8 @@ function currentGpuBlock(job) {
     const warning = (job.gpu && job.gpu.error) || job.gpu_warn;
     return `<div class="small">${esc(t('no_gpu'))}${warning ? `<br>⚠ ${shown(warning)}` : ''}</div>`;
   }
-  const rows = metrics.map(metric => `<tr><td>GPU ${shown(metric.index)}</td><td>${shown(metric.name)}</td><td>${shown(metric.gpu_util)}%</td><td>${shown(metric.mem_util)}%</td><td>${shown(metric.mem_used)} / ${shown(metric.mem_total)} MB</td><td>${shown(metric.temp)}°C</td><td>${shown(metric.power)} W</td><td>${shown(metric.sm_clock)} / ${shown(metric.mem_clock)} MHz</td></tr>`).join('');
-  return `<div class="history-wrap"><table><thead><tr><th>GPU</th><th>Model</th><th>Util</th><th>Mem util</th><th>VRAM</th><th>Temp</th><th>Power</th><th>SM / Mem clock</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const rows = metrics.map(metric => `<tr><td>${shown(metric.node)}</td><td>GPU ${shown(metric.index)}</td><td>${shown(metric.name)}</td><td>${shown(metric.gpu_util)}%</td><td>${shown(metric.mem_util)}%</td><td>${shown(metric.mem_used)} / ${shown(metric.mem_total)} MB</td><td>${shown(metric.temp)}°C</td><td>${shown(metric.power)} W</td><td>${shown(metric.sm_clock)} / ${shown(metric.mem_clock)} MHz</td></tr>`).join('');
+  return `<div class="history-wrap"><table><thead><tr><th>Node</th><th>GPU</th><th>Model</th><th>Util</th><th>Mem util</th><th>VRAM</th><th>Temp</th><th>Power</th><th>SM / Mem clock</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderJobDetail(job) {
