@@ -73,6 +73,8 @@ Explain the post-install workflow with command locations made explicit:
 3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the compute alias, and opens the configured project directory in an IDE whose SSH target is the compute alias.
 4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
 
+When launching Cursor, use its classic-window flag together with the remote folder URI. Current Cursor releases can otherwise route a command-line launch into the Agent/Glass landing window even though the Remote-SSH target is valid. This compatibility flag affects the window type; it does not disable Cursor's Agent features inside the IDE.
+
 Also explain that pre-establishing the login master is optional because `vista-allocate` can trigger SSH authentication itself. An interactive `ssh LOGIN_ALIAS` may remain open, but the allocation wrapper still runs from a separate local terminal.
 
 ## Remote recovery

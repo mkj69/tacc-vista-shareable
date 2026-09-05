@@ -56,4 +56,5 @@ test "$(grep -Fc 'Include ' "$test_home/.ssh/config")" -eq 1
 grep -Fq '"$@"' "$repo_dir/scripts/remote/start.sh"
 grep -Fq 'codex resume "$resume_ref"' "$repo_dir/scripts/remote/run-codex.sh"
 grep -Fq 'rm -f "$window_dir/active"' "$repo_dir/scripts/remote/run-codex.sh"
+grep -Fq 'exec "$editor_cli" --classic --new-window --folder-uri "$remote_uri"' "$repo_dir/scripts/local/vista-allocate"
 printf '%s\n' 'Smoke test passed.'

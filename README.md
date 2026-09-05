@@ -177,6 +177,8 @@ The final argument controls the launch:
 - `code` opens VS Code.
 - `none` prepares the compute SSH alias without opening an IDE.
 
+For current Cursor releases, the launcher requests a classic IDE window before opening the Remote-SSH folder. This prevents Cursor from showing its standalone Agent/Glass landing page in place of the file editor. Cursor's Agent tools remain available inside the IDE.
+
 The number following the partition is the requested number of hours. The command performs the remaining work:
 
 ```text

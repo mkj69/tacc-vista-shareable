@@ -68,4 +68,9 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 remote_uri="vscode-remote://ssh-remote+${COMPUTE_ALIAS}${remote_path}"
 printf 'Opening %s at the configured remote project directory...\n' "$editor_name"
+if [[ "$editor" == cursor ]]; then
+    # Cursor 3.x may otherwise route a remote-folder launch into its
+    # Agent/Glass landing window instead of a conventional IDE window.
+    exec "$editor_cli" --classic --new-window --folder-uri "$remote_uri"
+fi
 exec "$editor_cli" --new-window --folder-uri "$remote_uri"
