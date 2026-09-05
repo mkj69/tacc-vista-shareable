@@ -1,0 +1,87 @@
+#!/bin/bash
+set -euo pipefail
+
+lib_dir="$HOME/.local/lib/tacc-vista"
+# shellcheck source=/dev/null
+source "$lib_dir/common.sh"
+load_config
+require_config_vars LOGIN_ALIAS
+
+preferred_local_port="${VISTA_DASHBOARD_LOCAL_PORT:-8766}"
+remote_port="${VISTA_DASHBOARD_REMOTE_PORT:-8765}"
+state_dir="${VISTA_DASHBOARD_STATE_DIR:-$HOME/.cache/tacc-vista}"
+forward_state="$state_dir/dashboard-forward"
+
+mkdir -p "$state_dir"
+
+printf '%s\n' 'Starting the dashboard on the Vista login node...'
+ssh -T "$LOGIN_ALIAS" \
+    "VISTA_DASHBOARD_PORT='$remote_port' \$HOME/.local/lib/tacc-vista/dashboard-start.sh"
+
+if [[ -f "$forward_state" ]]; then
+    read -r old_local_port old_remote_port < "$forward_state" || true
+    if [[ "$old_local_port" =~ ^[0-9]+$ && "$old_remote_port" =~ ^[0-9]+$ ]]; then
+        ssh -O cancel \
+            -L "127.0.0.1:${old_local_port}:127.0.0.1:${old_remote_port}" \
+            "$LOGIN_ALIAS" >/dev/null 2>&1 || true
+    fi
+    rm -f "$forward_state"
+fi
+
+local_port="$preferred_local_port"
+for candidate_port in $(seq "$preferred_local_port" $((preferred_local_port + 20))); do
+    if python3 - "$candidate_port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+PY
+    then
+        local_port="$candidate_port"
+        break
+    fi
+done
+if ! python3 - "$local_port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+PY
+then
+    printf 'No free local dashboard port found in %s-%s.\n' \
+        "$preferred_local_port" "$((preferred_local_port + 20))" >&2
+    exit 1
+fi
+
+dashboard_url="http://127.0.0.1:${local_port}/"
+if [[ "$local_port" != "$preferred_local_port" ]]; then
+    printf 'Local port %s is busy; using %s instead.\n' \
+        "$preferred_local_port" "$local_port"
+fi
+
+printf 'Forwarding %s to the Vista login-node dashboard...\n' "$dashboard_url"
+ssh -O forward \
+    -o ExitOnForwardFailure=yes \
+    -L "127.0.0.1:${local_port}:127.0.0.1:${remote_port}" \
+    "$LOGIN_ALIAS"
+printf '%s %s\n' "$local_port" "$remote_port" > "$forward_state"
+
+for _ in {1..30}; do
+    if curl --fail --silent --max-time 1 "$dashboard_url" >/dev/null 2>&1; then
+        printf 'Dashboard available at %s\n' "$dashboard_url"
+        if [[ "${VISTA_DASHBOARD_OPEN_BROWSER:-1}" != 0 ]]; then
+            case "$(uname -s)" in
+                Darwin) open "$dashboard_url" ;;
+                Linux) command -v xdg-open >/dev/null 2>&1 && xdg-open "$dashboard_url" >/dev/null 2>&1 || true ;;
+            esac
+        fi
+        exit 0
+    fi
+    sleep 0.2
+done
+
+printf 'The SSH tunnel started, but the dashboard is not responding at %s\n' \
+    "$dashboard_url" >&2
+exit 1

@@ -36,6 +36,7 @@ HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$repo_dir/scripts/install.sh
 bash -n \
     "$test_home/.local/bin/vista-allocate" \
     "$test_home/.local/bin/vista-node-update.sh" \
+    "$test_home/.local/bin/vista-dashboard-open" \
     "$test_home/.local/lib/tacc-vista/common.sh" \
     "$repo_dir/scripts/install.sh" \
     "$repo_dir/scripts/doctor.sh" \
@@ -43,7 +44,16 @@ bash -n \
     "$repo_dir/scripts/remote/resolve-node.sh" \
     "$repo_dir/scripts/remote/codex-start.sh" \
     "$repo_dir/scripts/remote/run-codex.sh" \
-    "$repo_dir/scripts/remote/start.sh"
+    "$repo_dir/scripts/remote/start.sh" \
+    "$repo_dir/scripts/remote/dashboard-start.sh"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+rendered_dashboard="$test_root/rendered-dashboard.py"
+sed -e 's/__LOGIN_ALIAS__/login-test/g' -e 's/__COMPUTE_ALIAS__/compute-test/g' \
+    "$repo_dir/scripts/dashboard/vista_job_dashboard.py" >"$rendered_dashboard"
+if grep -Eq '__LOGIN_ALIAS__|__COMPUTE_ALIAS__' "$rendered_dashboard"; then
+    printf '%s\n' 'Expected dashboard aliases to be rendered during installation.' >&2
+    exit 1
+fi
 HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$repo_dir/scripts/doctor.sh"
 if HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vista-allocate" invalid 1 none >/dev/null 2>&1; then
     printf '%s\n' 'Expected invalid partition validation to fail.' >&2
@@ -64,6 +74,13 @@ grep -Fq 'rm -f "$window_dir/active"' "$repo_dir/scripts/remote/run-codex.sh"
 grep -Fq 'exec "$editor_cli" --classic --new-window --folder-uri "$remote_uri"' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'allocation_alias="${COMPUTE_ALIAS}-${job_id}"' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'allocation_alias="${COMPUTE_ALIAS}-${job_id}"' "$repo_dir/scripts/local/vista-node-update.sh"
+grep -Fq 'vista-dashboard-open' "$repo_dir/scripts/local/vista-allocate"
+grep -Fq 'ssh -O forward' "$repo_dir/scripts/local/vista-dashboard-open"
+grep -Fq '__LOGIN_ALIAS__' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq '__COMPUTE_ALIAS__' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq 'renderCpuCharts' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq 'renderGpuCharts' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+grep -Fq 'openDetailKeys' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq "submit-node.sh '\$partition' '\$walltime' '\$nodes'" "$repo_dir/scripts/local/vista-allocate"
 grep -Fq -- '--nodes="$nodes"' "$repo_dir/scripts/remote/submit-node.sh"
 grep -Fq -- '--ntasks="$nodes"' "$repo_dir/scripts/remote/submit-node.sh"

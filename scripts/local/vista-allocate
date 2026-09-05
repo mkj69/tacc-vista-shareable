@@ -70,6 +70,12 @@ if [[ "$editor" == none ]]; then
     exit 0
 fi
 
+if [[ "${TACC_VISTA_DASHBOARD_AUTO_OPEN:-1}" != 0 ]]; then
+    if ! "$HOME/.local/bin/vista-dashboard-open"; then
+        printf '%s\n' 'Warning: the dashboard could not be opened; continuing with the IDE.' >&2
+    fi
+fi
+
 if [[ "$editor" == cursor ]]; then
     editor_cli="$(command -v cursor || true)"
     if [[ -z "$editor_cli" && -x '/Applications/Cursor.app/Contents/Resources/app/bin/cursor' ]]; then

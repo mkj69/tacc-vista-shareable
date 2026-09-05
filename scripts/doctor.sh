@@ -26,7 +26,7 @@ else
     fail 'external configuration is incomplete'
 fi
 
-for command_name in bash ssh scp awk sed grep mktemp; do
+for command_name in bash ssh scp awk sed grep mktemp python3 curl seq; do
     if command -v "$command_name" >/dev/null 2>&1; then
         pass "local command is available: $command_name"
     else
@@ -56,6 +56,7 @@ fi
 for path in \
     "$HOME/.local/bin/vista-allocate" \
     "$HOME/.local/bin/vista-node-update.sh" \
+    "$HOME/.local/bin/vista-dashboard-open" \
     "$HOME/.local/lib/tacc-vista/common.sh" \
     "$HOME/.ssh/tacc-vista/config"; do
     if [[ -e "$path" ]]; then pass 'installed local component is present'; else fail 'an installed local component is missing'; fi
@@ -83,11 +84,13 @@ if (( check_remote )); then
         load_config "$HOME/.config/tacc-vista/config"
         require_config_vars REMOTE_PROJECT_DIR
         test -d "$REMOTE_PROJECT_DIR"
-        for file in common.sh submit-node.sh resolve-node.sh codex-start.sh run-codex.sh start.sh; do
+        for file in common.sh submit-node.sh resolve-node.sh codex-start.sh run-codex.sh start.sh dashboard-start.sh; do
             test -x "$lib/$file"
             bash -n "$lib/$file"
         done
-        for command_name in bash sbatch squeue scontrol python3 pgrep readlink codex; do
+        test -x "$lib/vista_job_dashboard.py"
+        python3 -c "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())" "$lib/vista_job_dashboard.py"
+        for command_name in bash sbatch squeue scontrol srun sstat sacct sprio python3 pgrep readlink codex; do
             command -v "$command_name" >/dev/null 2>&1
         done
         command -v tmux >/dev/null 2>&1 || command -v screen >/dev/null 2>&1

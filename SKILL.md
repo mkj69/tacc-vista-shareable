@@ -1,6 +1,6 @@
 ---
 name: tacc-vista-shareable
-description: Configure or operate a standalone, privacy-preserving TACC Vista SSH, Slurm allocation, IDE jump, and remote Codex recovery workflow from placeholders. Use for portable setups that must not embed or disclose identifiers, paths, credentials, job data, or node data.
+description: Configure or operate a standalone, privacy-preserving TACC Vista SSH, Slurm allocation, IDE jump, CPU/GPU job dashboard, and remote Codex recovery workflow from placeholders. Use for portable setups that must not embed or disclose identifiers, paths, credentials, job data, or node data.
 ---
 
 # TACC Vista Shareable
@@ -8,7 +8,7 @@ description: Configure or operate a standalone, privacy-preserving TACC Vista SS
 Build this standalone workflow on a user's machine:
 
 ```text
-local login authentication -> remote Slurm allocation -> dynamic compute SSH alias -> IDE
+local login authentication -> remote Slurm allocation -> job dashboard -> dynamic compute SSH alias -> IDE
 compute-node shell -> named tmux/screen windows -> exact Codex sessions
 ```
 
@@ -16,7 +16,7 @@ Start from the placeholders in [references/configuration-template.md](references
 
 ## Executable setup
 
-For a first-time installation, help the user fill the external configuration, then run `scripts/install.sh`. The installer creates the local SSH fragment and helper commands, installs the remote allocation/recovery helpers through the configured login alias, and leaves existing unrelated SSH settings intact. Run `scripts/doctor.sh --remote` afterward. Use `tests/smoke.sh` to validate the package itself without contacting Vista.
+For a first-time installation, help the user fill the external configuration, then run `scripts/install.sh`. The installer creates the local SSH fragment and helper commands, installs the remote allocation/recovery/dashboard helpers through the configured login alias, and leaves existing unrelated SSH settings intact. Run `scripts/doctor.sh --remote` afterward. Use `tests/smoke.sh` to validate the package itself without contacting Vista.
 
 Do not run the installer until every placeholder has been replaced and the user has authorized changes to local and remote configuration. The installer never submits a Slurm allocation; that remains a separate explicit action.
 
@@ -54,6 +54,8 @@ The local wrapper should:
 5. atomically update a private SSH include;
 6. open the preferred IDE at the configured remote project directory.
 
+When an IDE is requested, also open the loopback-only monitoring dashboard unless `TACC_VISTA_DASHBOARD_AUTO_OPEN=0`. Dashboard failure must warn without blocking an otherwise valid IDE connection.
+
 Shorter wall times may improve backfill but never guarantee an immediate start. Do not switch partitions, shorten or extend a job, cancel a job, or submit an additional allocation without explicit user authorization. Resolve the exact target privately and verify the resulting state.
 
 ## SSH behavior
@@ -64,13 +66,32 @@ The IDE SSH target must always be the compute alias after its allocation reaches
 
 `ControlPersist yes` has no configured expiry, but the master can still end after a reboot, process termination, socket removal, network or server disconnect, site policy action, or explicit closure. Losing the SSH master must not be described as cancelling a Slurm allocation; the two lifetimes are independent.
 
+## Job dashboard
+
+Install `vista-dashboard-open` locally and the dashboard server plus `dashboard-start.sh` on the login host. Run the server on a login node, bind it only to `127.0.0.1`, and expose it locally through an SSH forward on the existing login master. Never bind the dashboard to a public interface or write runtime job, node, account, username, or telemetry data into the skill directory.
+
+The dashboard must provide:
+
+- a home page for active jobs plus recent terminal history, with real Slurm estimated-start and priority data when available;
+- a per-job page with real SVG line charts for CPU utilization, RSS/MaxRSS, virtual memory, cumulative CPU time, GPU utilization, GPU memory, temperature, power, and clocks;
+- zero-valued chart series when a metric or device is absent, rather than replacing charts with text;
+- a bilingual Chinese/English toggle whose choice survives polling, reloads, and local-port changes;
+- persistent open/closed state for job-detail controls across automatic polling;
+- a bilingual common-command page with copy-only buttons and explicit local/login/compute execution locations.
+
+Poll the homepage without launching per-job GPU steps. On a running job detail page, read CPU/memory from `sstat`; derive normalized CPU utilization from the change in cumulative CPU time between browser samples. Query GPU metrics only for jobs whose Slurm TRES data indicates a GPU allocation, using a short overlapping `srun` step from the login node. Never run `nvidia-smi` for CPU-only jobs.
+
+Treat only pending, running, configuring, completing, suspended, or stopped states as active. Put cancelled, failed, timed-out, out-of-memory, node-failed, preempted, and completed jobs in history. Merge terminal IDs still visible through `squeue` with accounting history so a never-started cancellation moves out of the active table immediately.
+
+Explain that charts begin sampling when a job page is opened and keep recent samples in the browser; the dashboard cannot reconstruct telemetry that was never collected. The command page copies text only and must never execute scheduler mutations from a button.
+
 ## Normal operation
 
 Explain the post-install workflow with command locations made explicit:
 
 1. On the local computer, optionally pre-establish the reusable login master with `ssh -O check LOGIN_ALIAS 2>/dev/null || ssh -MNf LOGIN_ALIAS`. This prompts for fresh authentication only when no usable master exists.
 2. Still on the local computer, run `vista-allocate PARTITION HOURS NODES cursor` (or `code`/`none`). Omit `NODES` for a one-node allocation; preserve the legacy `vista-allocate PARTITION HOURS EDITOR` form. Never tell the user to run this local wrapper from the login-node shell.
-3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the base compute alias, creates an allocation-specific alias derived from the job ID in private local state, and opens exactly one IDE window whose SSH target is that allocation-specific alias.
+3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the base compute alias, creates an allocation-specific alias derived from the job ID in private local state, opens the dashboard through the login master, and opens exactly one IDE window whose SSH target is that allocation-specific alias.
 4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
 
 For a multi-node allocation, resolve the Slurm nodelist and point the allocation-specific alias at its first hostname. Explain that one invocation opens one IDE window on that first node; the other nodes remain part of the same allocation and require an allocation-aware distributed launcher. Preserve earlier allocation-specific aliases so simultaneous allocations can keep separate IDE windows and reconnect without a later invocation redirecting them. Do not imply that opening the IDE automatically uses every allocated accelerator.
@@ -93,4 +114,4 @@ Treat `~/start.sh` as optional convenience, not a prerequisite for allocation, S
 
 ## Verification
 
-Validate shell syntax and SSH configuration without echoing resolved identities. Test the login path and compute path separately. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.
+Validate shell and Python syntax and SSH configuration without echoing resolved identities. Test the login path, dashboard tunnel, and compute path separately. Verify the dashboard server is loopback-only and that the homepage does not run GPU sampling. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.

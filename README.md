@@ -1,10 +1,23 @@
 # TACC Vista Shareable Skill
 
-A privacy-preserving Codex skill for configuring a TACC Vista workflow that authenticates through a login host, requests a Slurm allocation, updates a stable compute-node SSH alias, connects Cursor or VS Code to the assigned compute node, and resumes Codex inside tmux or GNU screen.
+A privacy-preserving Codex skill for configuring a TACC Vista workflow that authenticates through a login host, requests a Slurm allocation, opens a CPU/GPU job dashboard, updates a stable compute-node SSH alias, connects Cursor or VS Code to the assigned compute node, and resumes Codex inside tmux or GNU screen.
 
 The repository contains placeholders only. It does not include usernames, account identifiers, endpoints, personal paths, node names, job IDs, credentials, or session data.
 
 ## News
+
+### 2026-09-05 — CPU/GPU job dashboard
+
+The installer now adds `vista-dashboard-open` and a loopback-only Vista dashboard. When an allocation reaches `RUNNING`, the wrapper opens the dashboard and then the requested IDE. The dashboard includes:
+
+- a home page for active and recently finished jobs;
+- estimated start time, priority factors, wait reasons, resources, paths, and Slurm details;
+- one detail page per job with real SVG line charts—not text charts—for CPU utilization, RSS/MaxRSS, virtual memory, cumulative CPU time, GPU utilization, GPU memory, temperature, power, and clocks;
+- zero lines when a metric is unused or unavailable;
+- Chinese/English switching, persistent expanded details, and five-second polling;
+- a common-command page with copy-only examples for local SSH, allocation, queue inspection, submission, cancellation, monitoring, and Codex recovery.
+
+Charts begin sampling when a job detail page opens. Recent samples stay in that browser, so telemetry that was never sampled cannot be reconstructed later. The dashboard runs on the login node because its GPU inspection path launches a short overlapping step inside an existing running allocation; the IDE still connects to the compute node. The server binds only to remote loopback and is reached through the reusable SSH login connection.
 
 ### 2026-09-05 — Multi-node allocation support
 
@@ -71,6 +84,7 @@ LOCAL COMPUTER
 │   ├─ submit one persistent Slurm allocation                  │
 │   ├─ wait for that exact job to reach RUNNING                │
 │   ├─ create a private allocation-specific SSH alias          │
+│   ├─ open the job dashboard through the login SSH master     │
 │   └─ open one IDE window through that allocation alias       │
 └───────────────────────────┬──────────────────────────────────┘
                             │ ProxyJump through login alias
@@ -152,6 +166,12 @@ The installer does not submit a Slurm job. After installation, the user explicit
 
 ```bash
 vista-allocate [partition] [hours] [nodes] [cursor|code|none]
+```
+
+The dashboard opens automatically when an IDE is requested. It can also be opened independently:
+
+```bash
+vista-dashboard-open
 ```
 
 ### How to read the placeholders and command examples
@@ -257,6 +277,7 @@ submit or reuse the configured Slurm allocation
   -> wait for that exact job to reach RUNNING
   -> discover its assigned compute node
   -> update the private compute SSH alias
+  -> open the loopback-only CPU/GPU dashboard through the login host
   -> connect the IDE to the compute node through ProxyJump
   -> open the configured remote project directory
 ```
@@ -311,6 +332,12 @@ Run the isolated package test without connecting to Vista:
 
 `doctor.sh` is read-only. It checks the external configuration, required local tools, generated SSH aliases, installed helpers, and—when `--remote` is supplied—the remote helper syntax and required command availability. It never submits or cancels a job.
 
+## Dashboard behavior
+
+The homepage intentionally avoids launching `nvidia-smi` for every job. Click **View CPU/GPU charts** beside an active or historical job to open its detail page. CPU and memory come from Slurm `sstat`. CPU utilization is calculated from the change in cumulative CPU time between samples and normalized by the allocated CPU count. GPU sampling runs only for a running job whose TRES data reports a GPU allocation; CPU-only jobs still display zero-valued GPU charts.
+
+Automatic polling updates values without collapsing opened details or changing the selected language. The language preference is stored in both browser storage and a cookie so it also survives a change between local forwarding ports. A cancelled job is removed from the active table and merged into recent terminal history, including a never-started cancellation that Slurm's time-range accounting query may otherwise omit.
+
 ## Repository contents
 
 ```text
@@ -324,11 +351,14 @@ scripts/doctor.sh
 scripts/common.sh
 scripts/local/vista-allocate
 scripts/local/vista-node-update.sh
+scripts/local/vista-dashboard-open
 scripts/remote/submit-node.sh
 scripts/remote/resolve-node.sh
 scripts/remote/codex-start.sh
 scripts/remote/run-codex.sh
 scripts/remote/start.sh
+scripts/remote/dashboard-start.sh
+scripts/dashboard/vista_job_dashboard.py
 tests/smoke.sh
 ```
 

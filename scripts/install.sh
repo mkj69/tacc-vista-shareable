@@ -73,15 +73,18 @@ chmod 700 "$ssh_dir" "$state_dir" "$local_bin" "$local_lib"
 install -m 700 "$script_dir/common.sh" "$local_lib/common.sh"
 install -m 700 "$script_dir/local/vista-allocate" "$local_bin/vista-allocate"
 install -m 700 "$script_dir/local/vista-node-update.sh" "$local_bin/vista-node-update.sh"
+install -m 700 "$script_dir/local/vista-dashboard-open" "$local_bin/vista-dashboard-open"
 
 fragment_tmp="$(mktemp "$state_dir/.config.XXXXXX")"
 node_tmp=''
 remote_config_tmp=''
+dashboard_render_tmp=''
 ssh_config_tmp=''
 cleanup() {
     [[ -z "$fragment_tmp" ]] || rm -f "$fragment_tmp"
     [[ -z "$node_tmp" ]] || rm -f "$node_tmp"
     [[ -z "$remote_config_tmp" ]] || rm -f "$remote_config_tmp"
+    [[ -z "$dashboard_render_tmp" ]] || rm -f "$dashboard_render_tmp"
     [[ -z "$ssh_config_tmp" ]] || rm -f "$ssh_config_tmp"
 }
 trap cleanup EXIT
@@ -143,6 +146,13 @@ if ! grep -Fq '$HOME/.local/bin' "$profile_file"; then
 fi
 
 if (( remote_install )); then
+    dashboard_render_tmp="$(mktemp "${TMPDIR:-/tmp}/tacc-vista-dashboard.XXXXXX")"
+    sed \
+        -e "s/__LOGIN_ALIAS__/$LOGIN_ALIAS/g" \
+        -e "s/__COMPUTE_ALIAS__/$COMPUTE_ALIAS/g" \
+        "$script_dir/dashboard/vista_job_dashboard.py" >"$dashboard_render_tmp"
+    chmod 600 "$dashboard_render_tmp"
+
     remote_config_tmp="$(mktemp "${TMPDIR:-/tmp}/tacc-vista-remote-config.XXXXXX")"
     {
         printf 'SCHEDULER_ACCOUNT=%s\n' "$SCHEDULER_ACCOUNT"
@@ -166,16 +176,19 @@ if (( remote_install )); then
         "$script_dir/remote/codex-start.sh" \
         "$script_dir/remote/run-codex.sh" \
         "$script_dir/remote/start.sh" \
+        "$script_dir/remote/dashboard-start.sh" \
         "$LOGIN_ALIAS:.local/lib/tacc-vista/"
+    scp -q "$dashboard_render_tmp" "$LOGIN_ALIAS:.local/lib/tacc-vista/vista_job_dashboard.py.new"
     scp -q "$remote_config_tmp" "$LOGIN_ALIAS:.config/tacc-vista/config.new"
     ssh -T "$LOGIN_ALIAS" '
         set -eu
-        chmod 700 "$HOME/.local/lib/tacc-vista/"*.sh
+        chmod 700 "$HOME/.local/lib/tacc-vista/"*.sh "$HOME/.local/lib/tacc-vista/vista_job_dashboard.py.new"
         chmod 600 "$HOME/.config/tacc-vista/config.new"
         if [ -f "$HOME/.config/tacc-vista/config" ]; then
             cp -p "$HOME/.config/tacc-vista/config" "$HOME/.config/tacc-vista/config.bak.$(date +%Y%m%d%H%M%S)"
         fi
         mv -f "$HOME/.config/tacc-vista/config.new" "$HOME/.config/tacc-vista/config"
+        mv -f "$HOME/.local/lib/tacc-vista/vista_job_dashboard.py.new" "$HOME/.local/lib/tacc-vista/vista_job_dashboard.py"
         if [ ! -e "$HOME/start.sh" ]; then
             ln -s "$HOME/.local/lib/tacc-vista/start.sh" "$HOME/start.sh"
         fi
@@ -186,6 +199,7 @@ trap - EXIT
 cleanup
 printf '%s\n' 'TACC Vista helpers installed successfully.'
 printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [nodes] [cursor|code|none]'
+printf '%s\n' 'Open the monitoring dashboard separately with: vista-dashboard-open'
 if (( remote_install )); then
     printf '%s\n' 'On a compute node, run: ~/start.sh'
 fi
