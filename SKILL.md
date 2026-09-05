@@ -43,7 +43,7 @@ Store non-secret machine-specific settings in a local configuration outside the 
 
 ## Allocation rules
 
-Support the partitions and limits available to the current account; discover them from the scheduler instead of assuming another user's values. Accept a short hours form and optionally an `HH:MM:SS` form. A persistent allocation can use a noninteractive Slurm job that sleeps until its wall time expires.
+Vista currently documents `gg` (Grace–Grace CPU), `gh` (Grace–Hopper GPU), and `gh-dev` (Grace–Hopper development) partitions. Its published limits are 48 hours for `gg` and `gh`, and 2 hours for `gh-dev`. Treat these as documented examples, not guaranteed account access or permanent configuration: check the live account limits with `qlimits`, then populate the external `PARTITIONS` and `PARTITION_LIMITS` values accordingly. Accept a short hours form and optionally an `HH:MM:SS` form. A persistent allocation can use a noninteractive Slurm job that sleeps until its wall time expires.
 
 The local wrapper should:
 

@@ -147,11 +147,29 @@ This preparation is recommended but optional. Running `vista-allocate` without i
 
 ### 2. Request a compute node and open the IDE
 
-For example, replace `partition-name` with one of the partitions allowed by that account:
+Vista currently documents three primary partitions:
+
+| Partition | Node type | Published maximum wall time |
+|---|---|---:|
+| `gg` | Grace–Grace CPU nodes | 48 hours |
+| `gh` | Grace–Hopper GPU nodes | 48 hours |
+| `gh-dev` | Grace–Hopper development queue | 2 hours |
+
+For example:
 
 ```bash
-vista-allocate partition-name 6 cursor
+vista-allocate gg 6 cursor
+vista-allocate gh 6 cursor
+vista-allocate gh-dev 2 cursor
 ```
+
+Only use a partition available to the current TACC account. Queue availability and limits can change, and TACC notes that its documentation table may lag behind the live scheduler configuration. Check the current account's real-time limits from the local computer with:
+
+```bash
+ssh your-login-alias qlimits
+```
+
+Then make sure the external `PARTITIONS` and `PARTITION_LIMITS` settings match those results. See the [official TACC Vista queue documentation](https://docs.tacc.utexas.edu/hpc/vista/running/) for the current published definitions.
 
 The final argument controls the launch:
 
@@ -159,7 +177,7 @@ The final argument controls the launch:
 - `code` opens VS Code.
 - `none` prepares the compute SSH alias without opening an IDE.
 
-The number `6` means six hours. The command performs the remaining work:
+The number following the partition is the requested number of hours. The command performs the remaining work:
 
 ```text
 submit or reuse the configured Slurm allocation
