@@ -1,0 +1,23 @@
+# Merge this fragment into the user's SSH config after replacing placeholders.
+Include <LOCAL_NODE_INCLUDE>
+
+Host <LOGIN_ALIAS>
+    HostName <VISTA_LOGIN_HOST>
+    User <TACC_USERNAME>
+    IdentityFile <SSH_KEY_PATH>
+    IdentitiesOnly yes
+    ControlMaster auto
+    ControlPath <LOCAL_CONTROL_PATH>
+    ControlPersist yes
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+
+Host <COMPUTE_ALIAS>
+    User <TACC_USERNAME>
+    IdentityFile <SSH_KEY_PATH>
+    IdentitiesOnly yes
+    ProxyJump <LOGIN_ALIAS>
+    StrictHostKeyChecking accept-new
+    CheckHostIP no
+    ServerAliveInterval 30
+    ServerAliveCountMax 3

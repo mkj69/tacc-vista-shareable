@@ -1,0 +1,4 @@
+interface:
+  display_name: "TACC Vista (Shareable)"
+  short_description: "Configure Vista safely from portable placeholders"
+  default_prompt: "Use $tacc-vista-shareable to configure a standalone TACC Vista allocation and IDE workflow from placeholders."

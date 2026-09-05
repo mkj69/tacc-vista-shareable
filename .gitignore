@@ -1,0 +1,8 @@
+.DS_Store
+*.local
+*.env
+*.pem
+*.key
+*.sock
+*.session
+current-node.conf
