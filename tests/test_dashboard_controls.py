@@ -129,6 +129,40 @@ class SubmissionHelperTests(unittest.TestCase):
         self.assertIn("fetch('/api/submit'", html)
 
 
+class LiveSamplerAccountTests(unittest.TestCase):
+    def test_gpu_sampler_charges_parent_job_account(self) -> None:
+        gpu_output = (
+            "node-a|0, 50, 20, 1024, 97871, 40, 200.0, 1800, 2600, 5, 16, "
+            "NVIDIA GH200 120GB"
+        )
+        process_output = "node-a|123, python, 1024"
+        with mock.patch.object(DASHBOARD.shutil, "which", return_value="/usr/bin/srun"), mock.patch.object(
+            DASHBOARD, "run_cmd", side_effect=[gpu_output, process_output]
+        ) as run_cmd:
+            data, warning = DASHBOARD.query_job_gpu(
+                "12345", "gh", "project-test", 1, "node-a"
+            )
+
+        self.assertIsNone(warning)
+        self.assertEqual(data["metrics"][0]["node"], "node-a")
+        self.assertEqual(len(run_cmd.call_args_list), 2)
+        for call in run_cmd.call_args_list:
+            self.assertIn("--account=project-test", call.args[0])
+
+    def test_node_sampler_charges_parent_job_account(self) -> None:
+        output = "node-a|1000|500|1000000|500000|1.0|0.5|0.2"
+        with mock.patch.object(DASHBOARD.shutil, "which", return_value="/usr/bin/srun"), mock.patch.object(
+            DASHBOARD, "run_cmd", return_value=output
+        ) as run_cmd:
+            data, warning = DASHBOARD.query_job_node_resources(
+                "12345", "gh", "project-test", 1, "node-a"
+            )
+
+        self.assertIsNone(warning)
+        self.assertEqual(data["nodes"][0]["node"], "node-a")
+        self.assertIn("--account=project-test", run_cmd.call_args.args[0])
+
+
 class CancellationEndpointTests(unittest.TestCase):
     def post(self, payload: dict[str, str], token: str, path: str = "/api/cancel") -> tuple[int, dict[str, str]]:
         body = json.dumps(payload).encode("utf-8")

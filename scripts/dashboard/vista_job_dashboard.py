@@ -686,6 +686,7 @@ def merge_history_jobs(
 def query_job_gpu(
     jobid: str,
     partition: str,
+    account: str,
     node_count: object,
     node_list: str,
 ) -> tuple[dict, str | None]:
@@ -707,6 +708,8 @@ def query_job_gpu(
         "--ntasks-per-node=1",
         "--time=00:00:15",
     ]
+    if account and account not in {"N/A", "(null)", "None"}:
+        step_cmd.append(f"--account={account}")
     if node_list and node_list not in {"N/A", "(null)", "None"}:
         step_cmd.append(f"--nodelist={node_list}")
 
@@ -762,6 +765,7 @@ def query_job_gpu(
 def query_job_node_resources(
     jobid: str,
     partition: str,
+    account: str,
     node_count: object,
     node_list: str,
 ) -> tuple[dict[str, object], str | None]:
@@ -781,6 +785,8 @@ def query_job_node_resources(
         "--ntasks-per-node=1",
         "--time=00:00:15",
     ]
+    if account and account not in {"N/A", "(null)", "None"}:
+        step_cmd.append(f"--account={account}")
     if node_list and node_list not in {"N/A", "(null)", "None"}:
         step_cmd.append(f"--nodelist={node_list}")
 
@@ -948,6 +954,7 @@ def collect_all(
             )
         )
         partition = str(j.get("partition") or detail.get("Partition") or "").rstrip("*").lower()
+        account = str(j.get("account") or detail.get("Account") or "").strip()
         features = str(detail.get("Features", ""))
         has_gpu_allocation = partition in {"gh", "gh-dev"} or bool(
             re.search(r"(?:gres/)?gpu(?::[^=,\s]+)?=\d+", tres_text, re.IGNORECASE)
@@ -957,6 +964,7 @@ def collect_all(
             data, warn = query_job_gpu(
                 j["jobid"],
                 partition,
+                account,
                 detail.get("NumNodes", j.get("num_nodes", 1)),
                 str(j.get("nodes", "")),
             )
@@ -979,6 +987,7 @@ def collect_all(
             node_cpu_data, node_cpu_warn = query_job_node_resources(
                 j["jobid"],
                 partition,
+                account,
                 detail.get("NumNodes", j.get("num_nodes", 1)),
                 str(j.get("nodes", "")),
             )
@@ -1957,34 +1966,42 @@ function metricNumber(value) {
 
 function recordDetailSample(job) {
   const metrics = (job.gpu && job.gpu.metrics) || [];
+  const gpuSamplingFailed = Boolean(job.gpu && job.gpu.error);
   const seriesKey = metric => metric.series_id || (metric.node ? `${metric.node} / GPU ${metric.index}` : `GPU ${metric.index}`);
   const byIndex = Object.fromEntries(metrics.map(metric => [seriesKey(metric), metric]));
+  if (Object.keys(byIndex).some(key => key.includes(' / GPU '))) {
+    for (const key of Object.keys(detailSeries)) {
+      if (/^GPU \d+$/.test(key)) delete detailSeries[key];
+    }
+  }
   const explicitGpuCount = tresCount(job.alloc_tres !== 'N/A' ? job.alloc_tres : job.req_tres, 'gpu');
   const partition = String(job.partition || '').replace(/\*$/, '').toLowerCase();
   const implicitGpuCount = ['gh', 'gh-dev'].includes(partition) ? safeNumber(job.num_nodes) : 0;
   const requestedGpuCount = Math.max(explicitGpuCount, implicitGpuCount);
   const knownIndexes = new Set([...Object.keys(detailSeries), ...Object.keys(byIndex)]);
-  if (!knownIndexes.size) {
+  if (!gpuSamplingFailed && !knownIndexes.size) {
     for (let index = 0; index < Math.max(1, requestedGpuCount); index += 1) knownIndexes.add(`GPU ${index}`);
   }
   const now = Date.now();
-  for (const index of knownIndexes) {
-    const metric = byIndex[index] || {};
-    if (!detailSeries[index]) detailSeries[index] = [];
-    detailSeries[index].push({
-      t: now,
-      gpu_util: metricNumber(metric.gpu_util),
-      mem_util: metricNumber(metric.mem_util),
-      mem_used: metricNumber(metric.mem_used),
-      mem_total: metricNumber(metric.mem_total),
-      temp: metricNumber(metric.temp),
-      power: metricNumber(metric.power),
-      sm_clock: metricNumber(metric.sm_clock),
-      mem_clock: metricNumber(metric.mem_clock)
-    });
-    if (detailSeries[index].length > DETAIL_HISTORY_LIMIT) detailSeries[index].splice(0, detailSeries[index].length - DETAIL_HISTORY_LIMIT);
+  if (!gpuSamplingFailed) {
+    for (const index of knownIndexes) {
+      const metric = byIndex[index] || {};
+      if (!detailSeries[index]) detailSeries[index] = [];
+      detailSeries[index].push({
+        t: now,
+        gpu_util: metricNumber(metric.gpu_util),
+        mem_util: metricNumber(metric.mem_util),
+        mem_used: metricNumber(metric.mem_used),
+        mem_total: metricNumber(metric.mem_total),
+        temp: metricNumber(metric.temp),
+        power: metricNumber(metric.power),
+        sm_clock: metricNumber(metric.sm_clock),
+        mem_clock: metricNumber(metric.mem_clock)
+      });
+      if (detailSeries[index].length > DETAIL_HISTORY_LIMIT) detailSeries[index].splice(0, detailSeries[index].length - DETAIL_HISTORY_LIMIT);
+    }
+    try { localStorage.setItem(detailHistoryKey, JSON.stringify(detailSeries)); } catch (_) { /* storage is optional */ }
   }
-  try { localStorage.setItem(detailHistoryKey, JSON.stringify(detailSeries)); } catch (_) { /* storage is optional */ }
 
   const cpu = job.cpu || {};
   const previous = detailCpuSeries.length ? detailCpuSeries[detailCpuSeries.length - 1] : null;

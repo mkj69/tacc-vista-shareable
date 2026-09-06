@@ -6,6 +6,10 @@ The repository contains placeholders only. It does not include usernames, accoun
 
 ## News
 
+### 2026-09-06 — Live monitoring for users with multiple allocations
+
+Per-node CPU, memory, and GPU monitoring now passes the parent job's own Slurm account to every short overlapping `srun` sampling step. This prevents live charts from failing when one Vista user belongs to multiple projects and the scheduler can no longer infer which account to charge. The account is selected dynamically for each job rather than stored as a dashboard-wide default, so jobs from different allocations can be monitored side by side. Sampling failures remain visible as warnings but no longer append misleading zero points, and real node-qualified GPU series automatically replace obsolete generic placeholders from earlier failed samples.
+
 ### 2026-09-05 — Visual Slurm job submission
 
 The dashboard header now contains a collapsible **Submit a new job** form. It accepts the absolute path of an existing Vista `sbatch` script plus optional overrides for partition, time limit, nodes, tasks, CPUs per task, job name, account, and QoS. Blank overrides defer to the script's `#SBATCH` directives or scheduler defaults.
