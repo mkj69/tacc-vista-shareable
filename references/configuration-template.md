@@ -48,6 +48,7 @@ The generated node include starts with a non-routable placeholder hostname. Afte
 - Node updater: distinguish pending/configuring from terminal failure, stop if the job disappears, and write the latest base alias plus persistent allocation- and node-specific aliases into private local SSH state.
 - IDE integration: default to one window through the primary allocation alias; support explicit `cursor-all`/`code-all` modes that open one window per allocated node. Preserve aliases for other active allocations so their windows do not get redirected.
 - Dashboard opener: start the loopback-only service on the login node, reuse the authenticated login master for a local port forward, open the browser, and keep dashboard failure non-fatal to IDE launch.
+- Slack notifier: optionally read a channel-specific Incoming Webhook through a hidden prompt, store it in a user-restricted file outside the repository, poll Slurm through the existing login alias with `BatchMode=yes`, and send privacy-filtered state transitions without AI.
 
 ## Remote helper roles
 
@@ -78,7 +79,8 @@ This lifecycle applies only after a Codex window has been launched or migrated t
 7. Validate SSH aliases without printing expanded usernames, paths, or hostnames.
 8. Test login connectivity before compute connectivity.
 9. Submit a scheduler job only when the user explicitly asks for a live allocation.
+10. Configure optional Slack notifications only after the user creates a channel-specific Incoming Webhook; never pass the URL on a command line or place it in this repository.
 
 ## Sanitization before sharing
 
-Scan every repository file and archive for real names, usernames, emails, numeric account/allocation identifiers, absolute home or scratch paths, hostnames, node names, job IDs, key paths, tokens, and session artifacts. Only angle-bracket placeholders may represent machine-specific values. Re-run the skill validator after sanitization.
+Scan every repository file and archive for real names, usernames, emails, numeric account/allocation identifiers, absolute home or scratch paths, hostnames, node names, job IDs, key paths, Slack webhooks, tokens, and session artifacts. Only angle-bracket placeholders may represent machine-specific values. Re-run the skill validator after sanitization.

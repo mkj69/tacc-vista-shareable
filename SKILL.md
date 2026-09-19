@@ -94,6 +94,14 @@ The homepage submission form and active-job cancel button are the only scheduler
 
 For cancellation, require an exact typed Job ID confirmation, resolve the OS login user on the server, verify the exact job is active for that user through `squeue`, and invoke `scancel` with an argument list. Both endpoints must accept only POST with a per-process request token. Never accept a client-supplied user or expose the server outside loopback.
 
+## Optional Slack notifications
+
+Install the local `vista-slack-monitor` and `vista-slack-monitorctl` helpers, but do not enable them or request a Slack secret unless the user asks for notifications. The monitor must remain a non-AI local process: query the current user's Slurm state through the configured login alias, compare it with private local state, and post only transitions through a channel-specific Slack Incoming Webhook. Never route routine polling through Codex or another model.
+
+Store the webhook in a user-restricted configuration outside this repository. Accept it through hidden standard input, never as a command-line argument, and validate that it uses an official Slack Incoming Webhook HTTPS host. Do not print, log, commit, return, or copy the URL. Use `BatchMode=yes` for polling so the monitor never captures, predicts, or automates MFA; pause when the existing SSH authentication is unavailable.
+
+Persist exact Job IDs only in a mode-`600` local state file outside the repository. Slack messages must replace them with stable local labels and omit usernames, accounts, job names, node names, endpoints, and paths. A first run should establish a silent baseline. Notify on later state transitions and use sanitized wait categories rather than raw scheduler reasons. Keep Slack read-only with respect to Slurm: notifications must not submit or cancel jobs.
+
 ## Normal operation
 
 Explain the post-install workflow with command locations made explicit:
@@ -102,6 +110,7 @@ Explain the post-install workflow with command locations made explicit:
 2. Still on the local computer, run `vista-allocate PARTITION HOURS NODES cursor` (or `code`, `cursor-all`, `code-all`, or `none`). Omit `NODES` for a one-node allocation; preserve the legacy `vista-allocate PARTITION HOURS EDITOR` form. Never tell the user to run this local wrapper from the login-node shell.
 3. The wrapper submits or reuses the configured allocation, waits for that exact job, updates the base compute alias, creates allocation- and node-specific aliases in private local state, opens the dashboard through the login master, and opens the requested IDE window or windows.
 4. In the IDE's compute-node terminal, optionally run `~/start.sh` for managed multi-window Codex recovery, or use `codex resume --all` manually.
+5. When the user has explicitly enabled Slack alerts, keep `vista-slack-monitorctl` on the local machine. Configure the webhook through its hidden prompt, send a test, then start the detached monitor. Restart it after the local machine reboots.
 
 Keep `vista-open-all JOB_ID [cursor|code]` separate from `vista-allocate`. It must accept only an explicit existing numeric Job ID, resolve that job, refresh its private per-node aliases, and open one window per node. It must never call an allocation submit helper or fall back to creating a job when the ID is missing, finished, or invalid. It may wait when that exact existing job is pending.
 
@@ -125,4 +134,4 @@ Treat `~/start.sh` as optional convenience, not a prerequisite for allocation, S
 
 ## Verification
 
-Validate shell, Python, embedded JavaScript, and SSH configuration without echoing resolved identities. Test the login path, dashboard tunnel, and compute path separately. Verify the dashboard server is loopback-only, that the homepage does not run GPU sampling, and that control tests replace both `sbatch` and `scancel` with mocks. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.
+Validate shell, Python, embedded JavaScript, and SSH configuration without echoing resolved identities. Test the login path, dashboard tunnel, and compute path separately. Verify the dashboard server is loopback-only, that the homepage does not run GPU sampling, and that control tests replace both `sbatch` and `scancel` with mocks. Test Slack parsing, baseline, and transition logic without network access; never place a real webhook in tests. During a read-only diagnosis, do not submit, modify, or cancel scheduler jobs.

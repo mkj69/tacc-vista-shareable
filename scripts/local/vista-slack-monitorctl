@@ -1,0 +1,136 @@
+#!/bin/bash
+set -euo pipefail
+
+monitor="$HOME/.local/bin/vista-slack-monitor"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/tacc-vista"
+config_file="$config_dir/slack-monitor.env"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/tacc-vista-slack-monitor"
+session="vista-slack-monitor"
+
+usage() {
+    printf '%s\n' 'Usage: vista-slack-monitorctl configure|test|start|stop|restart|status|once|dry-run|log'
+}
+
+require_monitor() {
+    if [[ ! -x "$monitor" ]]; then
+        printf '%s\n' 'The Vista Slack monitor is not installed.' >&2
+        exit 1
+    fi
+}
+
+configure() {
+    mkdir -p "$config_dir"
+    chmod 700 "$config_dir"
+    printf '%s' 'Paste the Slack Incoming Webhook URL (input is hidden): '
+    IFS= read -r -s webhook
+    printf '\n'
+    if ! printf '%s' "$webhook" | python3 -c '
+import sys
+import urllib.parse
+url = sys.stdin.read()
+p = urllib.parse.urlparse(url)
+allowed = {"hooks.slack.com", "hooks.slack-gov.com"}
+if p.scheme != "https" or p.hostname not in allowed or not p.path.startswith("/services/") or p.query or p.fragment:
+    raise SystemExit(1)
+'; then
+        printf '%s\n' 'That is not an official Slack Incoming Webhook URL.' >&2
+        exit 2
+    fi
+    umask 077
+    temp_file="${config_file}.tmp.$$"
+    {
+        printf 'SLACK_WEBHOOK_URL=%s\n' "$webhook"
+        printf '%s\n' 'POLL_SECONDS=60'
+    } >"$temp_file"
+    chmod 600 "$temp_file"
+    mv -f "$temp_file" "$config_file"
+    unset webhook
+    printf '%s\n' 'Private Slack configuration saved.'
+}
+
+start_monitor() {
+    require_monitor
+    "$monitor" --check-config >/dev/null
+    mkdir -p "$state_dir"
+    chmod 700 "$state_dir"
+    if { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$session" 2>/dev/null; } || \
+       { command -v screen >/dev/null 2>&1 && screen -ls 2>/dev/null | grep -Eq "[.]${session}([[:space:]]|$)"; }; then
+        printf '%s\n' 'Vista Slack monitor is already running.'
+        return 0
+    fi
+    if command -v tmux >/dev/null 2>&1; then
+        tmux new-session -d -s "$session" "exec '$monitor' --daemon"
+    elif command -v screen >/dev/null 2>&1; then
+        screen -DmS "$session" "$monitor" --daemon
+    else
+        printf '%s\n' 'Starting the background monitor requires tmux or GNU screen.' >&2
+        exit 1
+    fi
+    sleep 0.5
+    if ! { { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$session" 2>/dev/null; } || \
+           { command -v screen >/dev/null 2>&1 && screen -ls 2>/dev/null | grep -Eq "[.]${session}([[:space:]]|$)"; }; }; then
+        printf '%s\n' 'Vista Slack monitor did not stay running. Check its log.' >&2
+        exit 1
+    fi
+    printf '%s\n' 'Vista Slack monitor started in a detached background session.'
+}
+
+stop_monitor() {
+    if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$session" 2>/dev/null; then
+        tmux kill-session -t "$session"
+        printf '%s\n' 'Vista Slack monitor stopped.'
+    elif command -v screen >/dev/null 2>&1 && screen -ls 2>/dev/null | grep -Eq "[.]${session}([[:space:]]|$)"; then
+        screen -S "$session" -X quit
+        printf '%s\n' 'Vista Slack monitor stopped.'
+    else
+        printf '%s\n' 'Vista Slack monitor is not running.'
+    fi
+}
+
+case "${1:-}" in
+    configure)
+        configure
+        ;;
+    test)
+        require_monitor
+        "$monitor" --test-webhook
+        ;;
+    start)
+        start_monitor
+        ;;
+    stop)
+        stop_monitor
+        ;;
+    restart)
+        stop_monitor
+        start_monitor
+        ;;
+    status)
+        if { command -v tmux >/dev/null 2>&1 && tmux has-session -t "$session" 2>/dev/null; } || \
+           { command -v screen >/dev/null 2>&1 && screen -ls 2>/dev/null | grep -Eq "[.]${session}([[:space:]]|$)"; }; then
+            printf '%s\n' 'Vista Slack monitor is running.'
+        else
+            printf '%s\n' 'Vista Slack monitor is not running.'
+            exit 1
+        fi
+        ;;
+    once)
+        require_monitor
+        "$monitor" --once
+        ;;
+    dry-run)
+        require_monitor
+        "$monitor" --dry-run
+        ;;
+    log)
+        if [[ -f "$state_dir/monitor.log" ]]; then
+            tail -n 40 "$state_dir/monitor.log"
+        else
+            printf '%s\n' 'No monitor log exists yet.'
+        fi
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

@@ -6,3 +6,8 @@
 *.sock
 *.session
 current-node.conf
+__pycache__/
+*.pyc
+slack-monitor.env
+monitor.log
+state.json

@@ -75,6 +75,8 @@ install -m 700 "$script_dir/local/vista-allocate" "$local_bin/vista-allocate"
 install -m 700 "$script_dir/local/vista-open-all" "$local_bin/vista-open-all"
 install -m 700 "$script_dir/local/vista-node-update.sh" "$local_bin/vista-node-update.sh"
 install -m 700 "$script_dir/local/vista-dashboard-open" "$local_bin/vista-dashboard-open"
+install -m 700 "$script_dir/local/vista-slack-monitor" "$local_bin/vista-slack-monitor"
+install -m 700 "$script_dir/local/vista-slack-monitorctl" "$local_bin/vista-slack-monitorctl"
 
 fragment_tmp="$(mktemp "$state_dir/.config.XXXXXX")"
 node_tmp=''
@@ -202,6 +204,7 @@ printf '%s\n' 'TACC Vista helpers installed successfully.'
 printf '%s\n' 'Open a new shell, then run: vista-allocate [partition] [hours] [nodes] [cursor|code|cursor-all|code-all|none]'
 printf '%s\n' 'Open every node of an existing job without submitting: vista-open-all JOB_ID [cursor|code]'
 printf '%s\n' 'Open the monitoring dashboard separately with: vista-dashboard-open'
+printf '%s\n' 'Optional non-AI Slack alerts: vista-slack-monitorctl configure'
 if (( remote_install )); then
     printf '%s\n' 'On a compute node, run: ~/start.sh'
 fi

@@ -45,7 +45,10 @@ if [[ -n "${SSH_KEY_PATH-}" ]]; then
 fi
 
 if [[ -n "${TACC_VISTA_CONFIG_FILE-}" ]]; then
-    config_mode="$(stat -f '%Lp' "$TACC_VISTA_CONFIG_FILE" 2>/dev/null || stat -c '%a' "$TACC_VISTA_CONFIG_FILE" 2>/dev/null || true)"
+    case "$(uname -s)" in
+        Darwin) config_mode="$(stat -f '%Lp' "$TACC_VISTA_CONFIG_FILE" 2>/dev/null || true)" ;;
+        *) config_mode="$(stat -c '%a' "$TACC_VISTA_CONFIG_FILE" 2>/dev/null || true)" ;;
+    esac
     if [[ "$config_mode" =~ ^[0-7]+00$ ]]; then
         pass 'external configuration permissions are user-restricted'
     else
@@ -58,6 +61,8 @@ for path in \
     "$HOME/.local/bin/vista-open-all" \
     "$HOME/.local/bin/vista-node-update.sh" \
     "$HOME/.local/bin/vista-dashboard-open" \
+    "$HOME/.local/bin/vista-slack-monitor" \
+    "$HOME/.local/bin/vista-slack-monitorctl" \
     "$HOME/.local/lib/tacc-vista/common.sh" \
     "$HOME/.ssh/tacc-vista/config"; do
     if [[ -e "$path" ]]; then pass 'installed local component is present'; else fail 'an installed local component is missing'; fi

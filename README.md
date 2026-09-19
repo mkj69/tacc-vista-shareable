@@ -6,6 +6,10 @@ The repository contains placeholders only. It does not include usernames, accoun
 
 ## News
 
+### 2026-09-19 — Optional non-AI Slack job alerts
+
+The installer now includes an optional local background monitor that queries the current user's Slurm queue through the existing authenticated Vista SSH alias and posts only state changes to a channel-specific Slack Incoming Webhook. It does not call Codex or any other AI service. Slack messages use private local labels such as `A01` instead of real Job IDs and omit usernames, accounts, job names, node names, endpoints, and paths. The webhook and exact runtime state remain in user-restricted files outside the repository.
+
 ### 2026-09-06 — Live monitoring for users with multiple allocations
 
 Per-node CPU, memory, and GPU monitoring now passes the parent job's own Slurm account to every short overlapping `srun` sampling step. This prevents live charts from failing when one Vista user belongs to multiple projects and the scheduler can no longer infer which account to charge. The account is selected dynamically for each job rather than stored as a dashboard-wide default, so jobs from different allocations can be monitored side by side. Sampling failures remain visible as warnings but no longer append misleading zero points, and real node-qualified GPU series automatically replace obsolete generic placeholders from earlier failed samples.
@@ -229,6 +233,17 @@ The dashboard opens automatically when an IDE is requested. It can also be opene
 vista-dashboard-open
 ```
 
+Optional Slack notifications are configured separately because an Incoming Webhook URL is a secret:
+
+```bash
+vista-slack-monitorctl configure
+vista-slack-monitorctl test
+vista-slack-monitorctl start
+vista-slack-monitorctl status
+```
+
+The hidden `configure` prompt accepts only an official Slack Incoming Webhook URL and stores it with user-only permissions outside the repository. The first successful poll creates a silent baseline; later transitions such as `PENDING` to `RUNNING`, `COMPLETED`, `FAILED`, or `TIMEOUT` generate notifications. `BatchMode=yes` prevents the monitor from capturing or automating multifactor prompts. If the authenticated SSH master is unavailable, monitoring pauses and resumes after the user restores ordinary SSH access.
+
 ### How to read the placeholders and command examples
 
 The names below are documentation stand-ins, not universal TACC commands or values that should be typed literally:
@@ -403,6 +418,21 @@ To cancel an active job from the dashboard, click **Cancel job**, then type the 
 
 To submit a job, expand **Submit a new job** in the header and enter an existing absolute Vista script path, such as `~/projects/example/job.sbatch`. Optional fields override matching `#SBATCH` directives; leave them blank to keep the script or scheduler value. Select **Review submission**, verify the preview, then select **Confirm job submission**. This creates a new Slurm job—it is separate from `vista-allocate`, does not open an IDE, and does not upload or modify the script.
 
+## Optional non-AI Slack alerts
+
+`vista-slack-monitor` is an ordinary Python/SSH process. It uses no model, API key, or Codex session, so ongoing polling and webhook delivery consume no AI tokens. It polls once per minute by default and stores exact Job IDs only in a private local state file so it can detect transitions. Messages replace them with stable labels such as `A01` and contain only state, node count, elapsed time, requested time limit, a sanitized wait category, and Slurm's estimated start time when available.
+
+Create a Slack Incoming Webhook assigned to the intended channel, then run `vista-slack-monitorctl configure` and paste the URL into the hidden prompt. Never paste the webhook into source code, an issue, a shell history argument, or a public log. Use `vista-slack-monitorctl test` before `start`. The controller runs the monitor inside a detached tmux session, or GNU screen when tmux is unavailable. After the local machine reboots, start the monitor again.
+
+Useful commands:
+
+```bash
+vista-slack-monitorctl dry-run  # read-only Vista query; sends no message
+vista-slack-monitorctl once     # perform one real state/notification cycle
+vista-slack-monitorctl log      # show the sanitized local log
+vista-slack-monitorctl stop
+```
+
 ## Repository contents
 
 ```text
@@ -418,6 +448,8 @@ scripts/local/vista-allocate
 scripts/local/vista-open-all
 scripts/local/vista-node-update.sh
 scripts/local/vista-dashboard-open
+scripts/local/vista-slack-monitor
+scripts/local/vista-slack-monitorctl
 scripts/remote/submit-node.sh
 scripts/remote/resolve-node.sh
 scripts/remote/codex-start.sh
@@ -426,6 +458,7 @@ scripts/remote/start.sh
 scripts/remote/dashboard-start.sh
 scripts/dashboard/vista_job_dashboard.py
 tests/smoke.sh
+tests/test_slack_monitor.py
 ```
 
 Before publishing a change, run the Codex skill validator and scan the repository for real identifiers, absolute personal paths, credentials, job data, and session artifacts.

@@ -1,0 +1,533 @@
+#!/usr/bin/env python3
+"""Privacy-preserving Vista Slurm notifications for Slack.
+
+This program contains no AI integration. It queries Slurm through the existing
+Vista SSH alias and posts state transitions to a Slack Incoming Webhook.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import logging
+from logging.handlers import RotatingFileHandler
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+from typing import Any
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+TERMINAL_STATES = {
+    "BOOT_FAIL",
+    "CANCELLED",
+    "COMPLETED",
+    "DEADLINE",
+    "FAILED",
+    "NODE_FAIL",
+    "OUT_OF_MEMORY",
+    "PREEMPTED",
+    "REVOKED",
+    "TIMEOUT",
+    "UNKNOWN",
+}
+ALLOWED_WEBHOOK_HOSTS = {"hooks.slack.com", "hooks.slack-gov.com"}
+JOB_ID_RE = re.compile(r"^[0-9]+(?:_[0-9]+)?$")
+SSH_ALIAS_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+class MonitorError(RuntimeError):
+    pass
+
+
+class ConfigError(MonitorError):
+    pass
+
+
+def normalize_state(value: str) -> str:
+    value = value.strip().upper().split()[0] if value.strip() else "UNKNOWN"
+    return value.rstrip("+")
+
+
+def parse_key_value_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ConfigError(f"Invalid configuration line in {path.name}")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            raise ConfigError(f"Invalid configuration key in {path.name}")
+        values[key] = value.strip()
+    return values
+
+
+def validate_webhook(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in ALLOWED_WEBHOOK_HOSTS
+        or not parsed.path.startswith("/services/")
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ConfigError("Slack webhook must be an official HTTPS Incoming Webhook URL")
+
+
+def load_settings() -> dict[str, Any]:
+    home = Path.home()
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", home / ".config"))
+    state_home = Path(os.environ.get("XDG_STATE_HOME", home / ".local/state"))
+    vista_config = Path(
+        os.environ.get("TACC_VISTA_CONFIG", config_home / "tacc-vista/config")
+    )
+    slack_config = Path(
+        os.environ.get(
+            "VISTA_SLACK_CONFIG", config_home / "tacc-vista/slack-monitor.env"
+        )
+    )
+    vista = parse_key_value_file(vista_config)
+    slack = parse_key_value_file(slack_config)
+    login_alias = vista.get("LOGIN_ALIAS", "")
+    if not SSH_ALIAS_RE.fullmatch(login_alias):
+        raise ConfigError("Vista login alias is missing or invalid")
+    webhook = slack.get("SLACK_WEBHOOK_URL", "")
+    if webhook:
+        validate_webhook(webhook)
+    try:
+        poll_seconds = int(slack.get("POLL_SECONDS", "60"))
+    except ValueError as exc:
+        raise ConfigError("POLL_SECONDS must be an integer") from exc
+    if not 30 <= poll_seconds <= 3600:
+        raise ConfigError("POLL_SECONDS must be between 30 and 3600")
+    state_dir = Path(
+        os.environ.get(
+            "VISTA_SLACK_STATE_DIR",
+            state_home / "tacc-vista-slack-monitor",
+        )
+    )
+    return {
+        "login_alias": login_alias,
+        "webhook": webhook,
+        "poll_seconds": poll_seconds,
+        "state_dir": state_dir,
+        "state_path": state_dir / "state.json",
+        "lock_path": state_dir / "monitor.lock",
+        "log_path": state_dir / "monitor.log",
+        "ssh_timeout": 15,
+    }
+
+
+def parse_squeue(output: str) -> dict[str, dict[str, str]]:
+    jobs: dict[str, dict[str, str]] = {}
+    for line in output.splitlines():
+        parts = line.split("|", 7)
+        if len(parts) != 8:
+            continue
+        job_id = parts[0].strip()
+        if not JOB_ID_RE.fullmatch(job_id):
+            continue
+        jobs[job_id] = {
+            "state": normalize_state(parts[1]),
+            "elapsed": parts[2].strip() or "0:00",
+            "limit": parts[3].strip() or "unknown",
+            "nodes": parts[4].strip() or "unknown",
+            "submit": parts[5].strip(),
+            "start": parts[6].strip(),
+            "reason": safe_reason(parts[7]),
+        }
+    return jobs
+
+
+def parse_sacct(output: str) -> dict[str, dict[str, str]]:
+    jobs: dict[str, dict[str, str]] = {}
+    for line in output.splitlines():
+        parts = line.split("|", 7)
+        if len(parts) != 8:
+            continue
+        job_id = parts[0].strip()
+        if not JOB_ID_RE.fullmatch(job_id):
+            continue
+        jobs[job_id] = {
+            "state": normalize_state(parts[1]),
+            "elapsed": parts[2].strip() or "unknown",
+            "limit": parts[3].strip() or "unknown",
+            "nodes": parts[4].strip() or "unknown",
+            "submit": parts[5].strip(),
+            "start": parts[6].strip(),
+            "end": parts[7].strip(),
+            "reason": "none",
+        }
+    return jobs
+
+
+def safe_reason(raw: str) -> str:
+    reason = raw.strip().lower()
+    if "priority" in reason:
+        return "Priority / 等待调度优先级"
+    if "resource" in reason or "node" in reason:
+        return "Resources / 等待可用资源"
+    if "dependency" in reason:
+        return "Dependency / 等待依赖作业"
+    if "reservation" in reason:
+        return "Reservation / 等待预约资源"
+    if "account" in reason or "qos" in reason or "limit" in reason:
+        return "Account or queue limit / 等待账户或队列限制"
+    return "Scheduler / 等待调度" if reason and reason != "none" else "none"
+
+
+def run_remote(alias: str, remote_command: str, timeout: int) -> str:
+    command = [
+        "ssh",
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={timeout}",
+        alias,
+        remote_command,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout + 15,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MonitorError("Vista SSH query timed out") from exc
+    if result.returncode != 0:
+        raise MonitorError("Vista SSH query failed")
+    return result.stdout
+
+
+def query_active(settings: dict[str, Any]) -> dict[str, dict[str, str]]:
+    remote = (
+        "squeue --me --noheader "
+        "--format=%i\\|%T\\|%M\\|%l\\|%D\\|%V\\|%S\\|%r"
+    )
+    return parse_squeue(
+        run_remote(settings["login_alias"], remote, settings["ssh_timeout"])
+    )
+
+
+def query_terminal(
+    settings: dict[str, Any], job_ids: list[str]
+) -> dict[str, dict[str, str]]:
+    safe_ids = [job_id for job_id in job_ids if JOB_ID_RE.fullmatch(job_id)]
+    if not safe_ids:
+        return {}
+    joined = ",".join(safe_ids)
+    remote = (
+        f"sacct -X -j {joined} -n -P "
+        "-o JobIDRaw,State,Elapsed,Timelimit,NNodes,Submit,Start,End"
+    )
+    return parse_sacct(
+        run_remote(settings["login_alias"], remote, settings["ssh_timeout"])
+    )
+
+
+def initial_state() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "initialized": False,
+        "next_alias": 1,
+        "aliases": {},
+        "jobs": {},
+        "query_failures": 0,
+        "failure_alerted": False,
+    }
+
+
+def load_state(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return initial_state()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MonitorError("Monitor state is unreadable") from exc
+    if data.get("version") != 1:
+        raise MonitorError("Unsupported monitor state version")
+    return data
+
+
+def save_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    fd, temp_name = tempfile.mkstemp(prefix="state.", dir=path.parent, text=True)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    finally:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+
+
+def job_alias(state: dict[str, Any], job_id: str) -> str:
+    aliases = state.setdefault("aliases", {})
+    if job_id not in aliases:
+        aliases[job_id] = f"A{int(state.get('next_alias', 1)):02d}"
+        state["next_alias"] = int(state.get("next_alias", 1)) + 1
+    return aliases[job_id]
+
+
+def state_icon(state: str) -> str:
+    return {
+        "PENDING": "🕒",
+        "CONFIGURING": "⚙️",
+        "RUNNING": "▶️",
+        "COMPLETING": "⏳",
+        "COMPLETED": "✅",
+        "FAILED": "❌",
+        "CANCELLED": "⛔",
+        "TIMEOUT": "⌛",
+        "OUT_OF_MEMORY": "🧠",
+        "NODE_FAIL": "⚠️",
+        "PREEMPTED": "⚠️",
+    }.get(state, "ℹ️")
+
+
+def format_notification(label: str, job: dict[str, str]) -> str:
+    state = normalize_state(job.get("state", "UNKNOWN"))
+    lines = [
+        f"{state_icon(state)} *Vista job alert / Vista 作业提醒*",
+        f"• Job label / 作业标签：`{label}`",
+        f"• State / 状态：`{state}`",
+        f"• Nodes / 节点数：{job.get('nodes', 'unknown')}",
+        f"• Elapsed / limit / 已用与时限：{job.get('elapsed', 'unknown')} / {job.get('limit', 'unknown')}",
+    ]
+    if state == "PENDING":
+        reason = job.get("reason", "none")
+        if reason != "none":
+            lines.append(f"• Reason / 原因：{reason}")
+        start = job.get("start", "")
+        if start and start.upper() not in {"N/A", "UNKNOWN", "NONE"}:
+            lines.append(f"• Slurm estimated start / 预计启动：{start}")
+    lines.append("_Account, real job ID, node names, and paths are hidden / 已隐藏账户、真实作业号、节点名和路径。_")
+    return "\n".join(lines)
+
+
+def post_slack(webhook: str, message: str) -> None:
+    if not webhook:
+        raise ConfigError("Slack webhook is not configured")
+    validate_webhook(webhook)
+    body = json.dumps({"text": message}, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        webhook,
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            reply = response.read(256).decode("utf-8", "replace").strip()
+            if response.status != 200 or reply != "ok":
+                raise MonitorError("Slack rejected the notification")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise MonitorError("Slack notification failed") from exc
+
+
+def process_snapshot(
+    state: dict[str, Any],
+    active: dict[str, dict[str, str]],
+    terminal: dict[str, dict[str, str]] | None = None,
+    now: int | None = None,
+) -> list[str]:
+    terminal = terminal or {}
+    timestamp = int(now if now is not None else time.time())
+    messages: list[str] = []
+    tracked: dict[str, dict[str, Any]] = state.setdefault("jobs", {})
+
+    if not state.get("initialized"):
+        for job_id, job in active.items():
+            job_alias(state, job_id)
+            tracked[job_id] = {**job, "last_seen": timestamp, "missing": 0}
+        state["initialized"] = True
+        return messages
+
+    for job_id, job in active.items():
+        label = job_alias(state, job_id)
+        previous = tracked.get(job_id)
+        if previous is None or normalize_state(previous.get("state", "")) != job["state"]:
+            messages.append(format_notification(label, job))
+        tracked[job_id] = {**job, "last_seen": timestamp, "missing": 0}
+
+    for job_id, previous in list(tracked.items()):
+        previous_state = normalize_state(str(previous.get("state", "UNKNOWN")))
+        if job_id in active or previous_state in TERMINAL_STATES:
+            continue
+        if job_id in terminal:
+            final = terminal[job_id]
+            final_state = normalize_state(final.get("state", "UNKNOWN"))
+            if final_state != previous_state:
+                messages.append(format_notification(job_alias(state, job_id), final))
+            tracked[job_id] = {**final, "last_seen": timestamp, "missing": 0}
+            continue
+        previous["missing"] = int(previous.get("missing", 0)) + 1
+        if previous["missing"] >= 5:
+            unknown = {**previous, "state": "UNKNOWN"}
+            messages.append(format_notification(job_alias(state, job_id), unknown))
+            tracked[job_id] = {**unknown, "last_seen": timestamp, "missing": 0}
+
+    cutoff = timestamp - 7 * 24 * 60 * 60
+    for job_id, job in list(tracked.items()):
+        if (
+            normalize_state(str(job.get("state", ""))) in TERMINAL_STATES
+            and int(job.get("last_seen", timestamp)) < cutoff
+        ):
+            tracked.pop(job_id, None)
+            state.get("aliases", {}).pop(job_id, None)
+    return messages
+
+
+def configure_logging(path: Path) -> logging.Logger:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    logger = logging.getLogger("vista-slack-monitor")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = RotatingFileHandler(path, maxBytes=512_000, backupCount=2)
+        os.chmod(path, 0o600)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+    return logger
+
+
+def poll_once(settings: dict[str, Any], logger: logging.Logger) -> int:
+    state = load_state(settings["state_path"])
+    try:
+        active = query_active(settings)
+        missing = [
+            job_id
+            for job_id, job in state.get("jobs", {}).items()
+            if job_id not in active
+            and normalize_state(str(job.get("state", ""))) not in TERMINAL_STATES
+        ]
+        terminal = query_terminal(settings, missing) if missing else {}
+    except MonitorError:
+        failures = int(state.get("query_failures", 0)) + 1
+        state["query_failures"] = failures
+        if failures >= 3 and not state.get("failure_alerted"):
+            post_slack(
+                settings["webhook"],
+                "⚠️ *Vista alerts paused / Vista 作业提醒暂停*\nVita cannot currently read Slurm through the existing SSH authentication. The monitor did not bypass MFA and will resume automatically after connectivity returns. / Vita 暂时无法通过现有 SSH 认证读取 Slurm；监控器未绕过 MFA，连接恢复后会自动继续。",
+            )
+            state["failure_alerted"] = True
+        save_state(settings["state_path"], state)
+        logger.warning("Vista query unavailable; no scheduler identifiers were logged")
+        return 1
+
+    if state.get("failure_alerted"):
+        post_slack(
+            settings["webhook"],
+            "✅ *Vista alerts restored / Vista 作业提醒已恢复*\nThe read-only Slurm connection is available again. / Slurm 只读连接已经恢复。",
+        )
+    state["query_failures"] = 0
+    state["failure_alerted"] = False
+    messages = process_snapshot(state, active, terminal)
+    for message in messages:
+        post_slack(settings["webhook"], message)
+    save_state(settings["state_path"], state)
+    logger.info("Poll completed; active=%d notifications=%d", len(active), len(messages))
+    return 0
+
+
+def daemon(settings: dict[str, Any], logger: logging.Logger) -> int:
+    settings["state_dir"].mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(settings["state_dir"], 0o700)
+    lock = settings["lock_path"].open("a+", encoding="utf-8")
+    os.chmod(settings["lock_path"], 0o600)
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        logger.error("Another monitor process is already running")
+        return 2
+
+    stopping = False
+
+    def stop(_signum: int, _frame: Any) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    logger.info("Monitor started")
+    while not stopping:
+        try:
+            poll_once(settings, logger)
+        except Exception as exc:  # Keep the monitor alive without logging secrets.
+            logger.error("Poll failed: %s", type(exc).__name__)
+        for _ in range(settings["poll_seconds"]):
+            if stopping:
+                break
+            time.sleep(1)
+    logger.info("Monitor stopped")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check-config", action="store_true")
+    mode.add_argument("--test-webhook", action="store_true")
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--once", action="store_true")
+    mode.add_argument("--daemon", action="store_true")
+    args = parser.parse_args()
+    try:
+        settings = load_settings()
+        if args.check_config:
+            if not settings["webhook"]:
+                raise ConfigError("Slack webhook is not configured")
+            print("Configuration is valid.")
+            return 0
+        if args.test_webhook:
+            post_slack(
+                settings["webhook"],
+                "✅ *Vista background alert test / Vista 后台提醒测试*\nThe non-AI monitor is connected to Slack. This message contains no job, account, node, or path identifiers. / 非 AI 监控器已连接 Slack；本消息不包含作业、账户、节点或路径标识。",
+            )
+            print("Test notification sent.")
+            return 0
+        if args.dry_run:
+            active = query_active(settings)
+            print(f"Dry run succeeded; active jobs={len(active)}.")
+            return 0
+        if not settings["webhook"]:
+            raise ConfigError("Slack webhook is not configured")
+        logger = configure_logging(settings["log_path"])
+        if args.once:
+            return poll_once(settings, logger)
+        return daemon(settings, logger)
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
+    except MonitorError as exc:
+        print(f"Monitor error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

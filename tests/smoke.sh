@@ -38,6 +38,7 @@ bash -n \
     "$test_home/.local/bin/vista-open-all" \
     "$test_home/.local/bin/vista-node-update.sh" \
     "$test_home/.local/bin/vista-dashboard-open" \
+    "$test_home/.local/bin/vista-slack-monitorctl" \
     "$test_home/.local/lib/tacc-vista/common.sh" \
     "$repo_dir/scripts/install.sh" \
     "$repo_dir/scripts/doctor.sh" \
@@ -48,7 +49,9 @@ bash -n \
     "$repo_dir/scripts/remote/start.sh" \
     "$repo_dir/scripts/remote/dashboard-start.sh"
 python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$repo_dir/scripts/local/vista-slack-monitor"
 PYTHONPYCACHEPREFIX="$test_root/pycache" python3 "$repo_dir/tests/test_dashboard_controls.py"
+PYTHONPYCACHEPREFIX="$test_root/pycache" python3 "$repo_dir/tests/test_slack_monitor.py"
 test -s "$repo_dir/assets/screenshots/dashboard-visual-submit.png"
 test -s "$repo_dir/assets/screenshots/dashboard-guarded-cancel.png"
 grep -Fq 'assets/screenshots/dashboard-visual-submit.png' "$repo_dir/README.md"
@@ -66,6 +69,15 @@ grep -Fq 'Host compute-test' "$test_home/.ssh/tacc-vista/config"
 grep -Fq 'vista-node-not-ready.invalid' "$test_home/.ssh/tacc-vista/current-node.conf"
 head -n 1 "$test_home/.ssh/config" | grep -Fq 'Include '
 test "$(grep -Fc 'Include ' "$test_home/.ssh/config")" -eq 1
+test -x "$test_home/.local/bin/vista-slack-monitor"
+test -x "$test_home/.local/bin/vista-slack-monitorctl"
+mkdir -p "$test_home/.config/tacc-vista"
+cat >"$test_home/.config/tacc-vista/slack-monitor.env" <<'SLACKCONFIG'
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/TEST/TEST/TEST
+POLL_SECONDS=60
+SLACKCONFIG
+chmod 600 "$test_home/.config/tacc-vista/slack-monitor.env"
+HOME="$test_home" TACC_VISTA_CONFIG="$config_file" "$test_home/.local/bin/vista-slack-monitor" --check-config >/dev/null
 fake_bin="$test_root/bin"
 mkdir -p "$fake_bin"
 cat >"$fake_bin/ssh" <<'FAKESSH'
@@ -114,6 +126,8 @@ grep -Fq 'no Slurm job will be submitted' "$repo_dir/scripts/local/vista-open-al
 grep -Fq "remote_command+=\" '\$job_id' all\"" "$repo_dir/scripts/local/vista-node-update.sh"
 grep -Fq 'vista-dashboard-open' "$repo_dir/scripts/local/vista-allocate"
 grep -Fq 'ssh -O forward' "$repo_dir/scripts/local/vista-dashboard-open"
+grep -Fq 'BatchMode=yes' "$repo_dir/scripts/local/vista-slack-monitor"
+grep -Fq 'vista-slack-monitorctl configure' "$repo_dir/README.md"
 grep -Fq '__LOGIN_ALIAS__' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq '__COMPUTE_ALIAS__' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
 grep -Fq 'renderCpuCharts' "$repo_dir/scripts/dashboard/vista_job_dashboard.py"
